@@ -5,11 +5,12 @@ import numpy as np
 from datasets import Dataset
 from sklearn.model_selection import train_test_split
 from transformers import (
-    AutoTokenizer, 
+    AutoTokenizer,
     AutoModelForCausalLM,
     TrainingArguments,
     Trainer,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    BitsAndBytesConfig
 )
 from peft import (
     LoraConfig,
@@ -185,19 +186,28 @@ def create_model_and_tokenizer():
     """创建模型和分词器"""
     print("正在加载模型和分词器...")
     
-    model_name = "/root/code/Finance/Qwen"
+    model_name = "/root/autodl-tmp/Finance/Qwen"
     
     # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     
+    # 4位量化配置（QLoRA）
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
     # 加载模型
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        quantization_config=quantization_config,
     )
     
     # 准备模型进行训练
@@ -227,14 +237,15 @@ def train_model(model, tokenizer, train_dataset, eval_dataset, output_dir="./qwe
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=3,
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
-        warmup_steps=100,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,
+        warmup_steps=10,
         learning_rate=2e-5,
-        fp16=True,
-        logging_steps=50,
-        save_steps=500,
-        eval_steps=500,
+        bf16=True,
+        fp16=False,
+        logging_steps=10,
+        save_steps=25,
+        eval_steps=25,
         eval_strategy="steps",
         save_strategy="steps",
         load_best_model_at_end=True,

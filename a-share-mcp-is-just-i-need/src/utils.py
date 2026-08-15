@@ -3,10 +3,15 @@ import baostock as bs
 import os
 import sys
 import logging
+import threading
 import pandas as pd
 from contextlib import contextmanager
 from typing import List, Optional, Callable, Any
 from .data_source_interface import LoginError, DataSourceError, NoDataFoundError
+
+# Baostock是全局单例连接，login/logout会互相影响。
+# 多个Agent并发调用MCP工具时必须串行化，否则一个请求的logout会注销其他请求的会话。
+_baostock_lock = threading.Lock()
 
 # --- 日志设置 ---
 def setup_logging(level=logging.INFO):
@@ -23,50 +28,60 @@ def setup_logging(level=logging.INFO):
 logger = logging.getLogger(__name__)
 
 # --- Baostock上下文管理器 ---
+# Baostock官方推荐长会话模式：登录一次后保持会话。
+# 频繁login/logout会被服务端限流，出现login成功但查询报"用户未登录"(10001001)。
+_baostock_logged_in = False
+
+
+def reset_baostock_session():
+    """重置登录状态并登出，供查询报"用户未登录"时重新建立会话"""
+    global _baostock_logged_in
+    with _baostock_lock:
+        if _baostock_logged_in:
+            try:
+                bs.logout()
+            except Exception:
+                pass
+            _baostock_logged_in = False
+            logger.info("Baostock session reset.")
+
+
 @contextmanager
 def baostock_login_context():
-    """上下文管理器，处理Baostock登录和登出，抑制标准输出消息"""
-    # 重定向标准输出以抑制登录/登出消息
-    original_stdout_fd = sys.stdout.fileno()
-    saved_stdout_fd = os.dup(original_stdout_fd)
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    """上下文管理器，确保Baostock已登录（长会话，不主动登出）"""
+    global _baostock_logged_in
+    # 全局锁串行化：Baostock是全局单例连接，并发访问必须互斥
+    with _baostock_lock:
+        if not _baostock_logged_in:
+            # 重定向标准输出以抑制登录消息
+            original_stdout_fd = sys.stdout.fileno()
+            saved_stdout_fd = os.dup(original_stdout_fd)
+            devnull_fd = os.open(os.devnull, os.O_WRONLY)
 
-    os.dup2(devnull_fd, original_stdout_fd)
-    os.close(devnull_fd)
+            os.dup2(devnull_fd, original_stdout_fd)
+            os.close(devnull_fd)
 
-    logger.debug("Attempting Baostock login...")
-    lg = bs.login()
-    logger.debug(f"Login result: code={lg.error_code}, msg={lg.error_msg}")
+            logger.debug("Attempting Baostock login...")
+            lg = bs.login()
+            logger.debug(f"Login result: code={lg.error_code}, msg={lg.error_msg}")
 
-    # 恢复标准输出
-    os.dup2(saved_stdout_fd, original_stdout_fd)
-    os.close(saved_stdout_fd)
+            # 恢复标准输出
+            os.dup2(saved_stdout_fd, original_stdout_fd)
+            os.close(saved_stdout_fd)
 
-    if lg.error_code != '0':
-        # 在抛出异常前记录错误
-        logger.error(f"Baostock login failed: {lg.error_msg}")
-        raise LoginError(f"Baostock login failed: {lg.error_msg}")
+            if lg.error_code != '0':
+                # 在抛出异常前记录错误
+                logger.error(f"Baostock login failed: {lg.error_msg}")
+                raise LoginError(f"Baostock login failed: {lg.error_msg}")
 
-    logger.info("Baostock login successful.")
-    try:
-        yield  # API调用在这里进行
-    finally:
-        # 再次重定向标准输出以进行登出
-        original_stdout_fd = sys.stdout.fileno()
-        saved_stdout_fd = os.dup(original_stdout_fd)
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            _baostock_logged_in = True
+            logger.info("Baostock login successful.")
 
-        os.dup2(devnull_fd, original_stdout_fd)
-        os.close(devnull_fd)
-
-        logger.debug("Attempting Baostock logout...")
-        bs.logout()
-        logger.debug("Logout completed.")
-
-        # 恢复标准输出
-        os.dup2(saved_stdout_fd, original_stdout_fd)
-        os.close(saved_stdout_fd)
-        logger.info("Baostock logout successful.")
+        try:
+            yield  # API调用在这里进行（锁内串行执行）
+        finally:
+            # 保持会话不登出，供后续调用复用；进程退出时连接自然释放
+            pass
 
 # --- 通用数据获取函数 ---
 

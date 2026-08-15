@@ -1,19 +1,26 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import re
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 import pandas as pd
 
-def load_trained_risk_model(model_path="/root/code/Finance/qwen_risk_model"):
+def load_trained_risk_model(model_path="/root/autodl-tmp/Finance/qwen_risk_model"):
     """加载训练好的风险评估模型"""
     print("正在加载训练好的风险评估模型...")
-    
+
     # 加载基础模型
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    
+
     base_model = AutoModelForCausalLM.from_pretrained(
-        "/root/code/Finance/Qwen",
-        torch_dtype=torch.float16,
-        device_map="auto"
+        "/root/autodl-tmp/Finance/Qwen",
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        ),
     )
     model = PeftModel.from_pretrained(base_model, model_path)
     
@@ -38,8 +45,8 @@ User: News to Stock Symbol -- AAPL: Apple (AAPL) announced iPhone 15
 Assistant: 3
 
 User: {user_content}
-Assistant:"""
-    
+Assistant: """
+
     return conversation
 
 def predict_risk(model, tokenizer, text, stock_symbol="STOCK"):
@@ -63,17 +70,22 @@ def predict_risk(model, tokenizer, text, stock_symbol="STOCK"):
     # 解码输出
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     
-    # 提取预测的风险分数
-    assistant_response = generated_text.split("Assistant:")[-1].strip()
-    
+    # 提取预测的风险分数：从后往前取最后一个非空的Assistant回答段
+    parts = generated_text.split("Assistant:")
+    answer = ""
+    for part in reversed(parts[1:]):
+        part = part.strip()
+        if part:
+            answer = part
+            break
+
     # 尝试提取数字
-    try:
-        risk_score = int(assistant_response.split()[0])
+    match = re.search(r"\d+", answer)
+    if match:
+        risk_score = int(match.group())
         if 1 <= risk_score <= 5:
             return risk_score
-    except:
-        pass
-    
+
     return None
 
 def test_risk_model():

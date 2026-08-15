@@ -16,6 +16,11 @@ __pycache__/
 .idea/
 .DS_Store
 
+# Locally downloaded training resources
+downloads/
+risk_nasdaq/risk_deepseek_cleaned_nasdaq_news_full.csv
+nasdaq_news_sentiment/sentiment_deepseek_new_cleaned_nasdaq_news_full.csv
+
 # Downloaded models, adapters, checkpoints, and weights
 Qwen/
 FinR1/
@@ -30,4 +35,3 @@ qwen_sentiment_model/
 # Generated reports and execution logs
 Financial-MCP-Agent/logs/
 Financial-MCP-Agent/reports/
-

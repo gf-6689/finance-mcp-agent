@@ -13,6 +13,7 @@ from .utils import (
     format_fields            # 字段格式化函数
 )
 import requests
+import re
 from bs4 import BeautifulSoup
 # 为当前模块创建专用的日志记录器，便于调试和错误追踪
 logger = logging.getLogger(__name__)
@@ -668,29 +669,39 @@ class BaostockDataSource(FinancialDataSource):
     
     def _load_risk_model(self):
         """加载风险模型"""
+        # 已加载则复用缓存，避免每次 crawl_news 重新加载
+        if hasattr(self, "_cached_risk_model"):
+            return self._cached_risk_model
+
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
+            from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
             from peft import PeftModel
             import torch
-            
-            risk_model_path = "/mnt/data/guyx/self-learn/Finance/qwen_risk_model"
-            base_model_name = "/mnt/data/guyx/self-learn/Finance/Qwen"
-            
+
+            risk_model_path = "/root/autodl-tmp/Finance/qwen_risk_model"
+            base_model_name = "/root/autodl-tmp/Finance/Qwen"
+
             # 检查CUDA可用性
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"使用设备: {device}")
-            
+
             # 加载tokenizer
             tokenizer = AutoTokenizer.from_pretrained(base_model_name)
             tokenizer.pad_token = tokenizer.eos_token
-            
-            # 加载基础模型
+
+            # 加载基础模型（与训练时一致的4位量化，QLoRA）
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_model_name,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None
+                torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                device_map="auto" if device == "cuda" else None,
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                ) if device == "cuda" else None,
             )
-            
+
             # 加载LoRA适配器
             risk_model = PeftModel.from_pretrained(base_model, risk_model_path)
             
@@ -699,7 +710,8 @@ class BaostockDataSource(FinancialDataSource):
                 risk_model = risk_model.to(device)
             
             logger.info("风险模型加载成功")
-            return risk_model, tokenizer
+            self._cached_risk_model = (risk_model, tokenizer)
+            return self._cached_risk_model
             
         except Exception as e:
             logger.error(f"加载风险模型时出错: {e}")
@@ -707,29 +719,39 @@ class BaostockDataSource(FinancialDataSource):
     
     def _load_sentiment_model(self):
         """加载情感模型"""
+        # 已加载则复用缓存，避免每次 crawl_news 重新加载
+        if hasattr(self, "_cached_sentiment_model"):
+            return self._cached_sentiment_model
+
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
+            from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
             from peft import PeftModel
             import torch
-            
-            sentiment_model_path = "/mnt/data/guyx/self-learn/Finance/qwen_sentiment_model"
-            base_model_name = "/mnt/data/guyx/self-learn/Finance/Qwen"
-            
+
+            sentiment_model_path = "/root/autodl-tmp/Finance/qwen_sentiment_model"
+            base_model_name = "/root/autodl-tmp/Finance/Qwen"
+
             # 检查CUDA可用性
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"使用设备: {device}")
-            
+
             # 加载tokenizer
             tokenizer = AutoTokenizer.from_pretrained(base_model_name)
             tokenizer.pad_token = tokenizer.eos_token
-            
-            # 加载基础模型
+
+            # 加载基础模型（与训练时一致的4位量化，QLoRA）
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_model_name,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None
+                torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                device_map="auto" if device == "cuda" else None,
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                ) if device == "cuda" else None,
             )
-            
+
             # 加载LoRA适配器
             sentiment_model = PeftModel.from_pretrained(base_model, sentiment_model_path)
             
@@ -738,7 +760,8 @@ class BaostockDataSource(FinancialDataSource):
                 sentiment_model = sentiment_model.to(device)
             
             logger.info("情感模型加载成功")
-            return sentiment_model, tokenizer
+            self._cached_sentiment_model = (sentiment_model, tokenizer)
+            return self._cached_sentiment_model
             
         except Exception as e:
             logger.error(f"加载情感模型时出错: {e}")
@@ -772,12 +795,12 @@ User: News to Stock Symbol -- AAPL: Apple (AAPL) announced iPhone 15
 Assistant: 3
 
 User: {user_content}
-Assistant:"""
-            
+Assistant: """
+
             # 编码输入并移动到正确的设备
             inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
             inputs = {k: v.to(device) for k, v in inputs.items()}
-            
+
             # 生成预测
             with torch.no_grad():
                 outputs = model.generate(
@@ -787,22 +810,27 @@ Assistant:"""
                     temperature=0.1,
                     pad_token_id=tokenizer.eos_token_id
                 )
-            
+
             # 解码输出
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # 提取预测的风险分数
-            assistant_response = generated_text.split("Assistant:")[-1].strip()
-            
+
+            # 提取预测的风险分数：从后往前取最后一个非空的Assistant回答段
+            parts = generated_text.split("Assistant:")
+            answer = ""
+            for part in reversed(parts[1:]):
+                part = part.strip()
+                if part:
+                    answer = part
+                    break
+
             # 尝试提取数字
-            try:
-                risk_score = int(assistant_response.split()[0])
+            match = re.search(r"\d+", answer)
+            if match:
+                risk_score = int(match.group())
                 if 1 <= risk_score <= 5:
                     risk_map = {1: "极低风险", 2: "低风险", 3: "中等风险", 4: "高风险", 5: "极高风险"}
                     return f"{risk_score} ({risk_map[risk_score]})"
-            except:
-                pass
-            
+
             return "无法分析风险"
             
         except Exception as e:
@@ -837,12 +865,12 @@ User: News to Stock Symbol -- AAPL: Apple (AAPL) announced iPhone 15
 Assistant: 4
 
 User: {user_content}
-Assistant:"""
-            
+Assistant: """
+
             # 编码输入并移动到正确的设备
             inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
             inputs = {k: v.to(device) for k, v in inputs.items()}
-            
+
             # 生成预测
             with torch.no_grad():
                 outputs = model.generate(
@@ -852,22 +880,27 @@ Assistant:"""
                     temperature=0.1,
                     pad_token_id=tokenizer.eos_token_id
                 )
-            
+
             # 解码输出
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # 提取预测的情感分数
-            assistant_response = generated_text.split("Assistant:")[-1].strip()
-            
+
+            # 提取预测的情感分数：从后往前取最后一个非空的Assistant回答段
+            parts = generated_text.split("Assistant:")
+            answer = ""
+            for part in reversed(parts[1:]):
+                part = part.strip()
+                if part:
+                    answer = part
+                    break
+
             # 尝试提取数字
-            try:
-                sentiment_score = int(assistant_response.split()[0])
+            match = re.search(r"\d+", answer)
+            if match:
+                sentiment_score = int(match.group())
                 if 1 <= sentiment_score <= 5:
                     sentiment_map = {1: "负面", 2: "轻微负面", 3: "中性", 4: "正面", 5: "极正面"}
                     return f"{sentiment_score} ({sentiment_map[sentiment_score]})"
-            except:
-                pass
-            
+
             return "无法分析情感"
             
         except Exception as e:

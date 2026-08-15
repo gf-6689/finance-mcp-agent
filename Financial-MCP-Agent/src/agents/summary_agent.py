@@ -90,7 +90,7 @@ def truncate_report_at_baseline_time(report_content: str, current_time_info: str
     return report_content
 
 
-def load_finr1_model(model_path="/root/code/Finance/FinR1"):
+def load_finr1_model(model_path="/root/autodl-tmp/Finance/FinR1"):
     """加载FinR1模型"""
     logger.info(f"{WAIT_ICON} Loading FinR1 model from {model_path}...")
     
@@ -344,7 +344,7 @@ async def summary_agent(state: AgentState) -> Dict[str, Any]:
                 "model": "FinR1",
                 "temperature": 0.5,
                 "max_tokens": 5000,
-                "model_path": "/root/code/Finance/FinR1"
+                "model_path": "/root/autodl-tmp/Finance/FinR1"
             }
 
             # 加载FinR1模型
@@ -430,9 +430,10 @@ async def summary_agent(state: AgentState) -> Dict[str, Any]:
         # 移除任何可能出现的markdown代码块标记
         final_report = final_report.replace(
             "```markdown", "").replace("```", "").strip()
-        
-        # 使用正则表达式截断"分析基准时间"那一行之后的内容
-        final_report = truncate_report_at_baseline_time(final_report, current_time_info)
+
+        # 注意：不再调用 truncate_report_at_baseline_time。
+        # 该函数会把"分析基准时间"行之后的所有内容删除，而DeepSeek按
+        # prompt要求将基准日期写在报告开头，导致正文本体全部被截断。
 
         logger.info(
             f"{SUCCESS_ICON} SummaryAgent: Final report generated for {company_name} ({stock_code}).")

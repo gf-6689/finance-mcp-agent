@@ -17,6 +17,10 @@ from src.utils.state_definition import AgentState
 from src.tools.mcp_client import get_mcp_tools
 from src.utils.logging_config import setup_logger, ERROR_ICON, SUCCESS_ICON, WAIT_ICON
 from src.utils.execution_logger import get_execution_logger
+from src.utils.tool_logging_callback import (
+    ExecutionToolCallback,
+    invoke_react_with_tool_logging,
+)
 from dotenv import load_dotenv
 
 # 从.env文件加载环境变量
@@ -41,6 +45,7 @@ async def value_agent(state: AgentState) -> AgentState:
     # 获取执行日志记录器，用于记录 Agent的执行过程
     execution_logger = get_execution_logger()
     agent_name = "value_agent"
+    tool_callback = ExecutionToolCallback(agent_name, execution_logger)
 
     # 从状态中提取当前数据、消息和元数据
     current_data = state.get("data", {})
@@ -157,7 +162,9 @@ async def value_agent(state: AgentState) -> AgentState:
             }
 
             # 调用 Agent执行分析
-            response = await agent.ainvoke(input_data)
+            response = await invoke_react_with_tool_logging(
+                agent, input_data, tool_callback
+            )
 
             end_time = time.time()
             execution_time = end_time - start_time

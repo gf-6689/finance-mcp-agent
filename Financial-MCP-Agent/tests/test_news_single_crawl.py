@@ -26,16 +26,29 @@ class FakeTool:
         return self.result
 
 
+class FakeToolCallback:
+    def __init__(self):
+        self.calls = 0
+
+    async def ainvoke_tool(self, tool, arguments):
+        self.calls += 1
+        return await tool.ainvoke(arguments)
+
+
 @pytest.mark.asyncio
 async def test_news_crawl_is_invoked_once_and_removed_from_react_tools():
     crawl = FakeTool("crawl_news", result="已评分新闻")
     market = FakeTool("get_historical_k_data")
+    callback = FakeToolCallback()
 
     selected, remaining = partition_news_tools([crawl, market])
     query = build_news_query("贵州茅台")
-    result = await invoke_news_crawl_once(selected, query, top_k=10)
+    result = await invoke_news_crawl_once(
+        selected, query, top_k=10, tool_callback=callback
+    )
 
     assert result == "已评分新闻"
+    assert callback.calls == 1
     assert crawl.calls == [{"query": query, "top_k": 10}]
     assert [tool.name for tool in remaining] == ["get_historical_k_data"]
 

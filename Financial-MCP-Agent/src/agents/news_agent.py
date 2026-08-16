@@ -17,6 +17,10 @@ from src.utils.state_definition import AgentState
 from src.tools.mcp_client import get_mcp_tools
 from src.utils.logging_config import setup_logger, ERROR_ICON, SUCCESS_ICON, WAIT_ICON
 from src.utils.execution_logger import get_execution_logger
+from src.utils.tool_logging_callback import (
+    ExecutionToolCallback,
+    invoke_react_with_tool_logging,
+)
 from dotenv import load_dotenv
 
 # 从.env文件加载环境变量
@@ -41,9 +45,16 @@ def build_news_query(company_name: str) -> str:
     return f"{company_name} 最新新闻 股价 业绩 行业动态"
 
 
-async def invoke_news_crawl_once(crawl_tool, query: str, top_k: int = 10) -> str:
+async def invoke_news_crawl_once(
+    crawl_tool, query: str, top_k: int = 10, tool_callback=None
+) -> str:
     """调用一次新闻爬取工具，并把空结果或工具错误转成明确失败。"""
-    result = await crawl_tool.ainvoke({"query": query, "top_k": top_k})
+    arguments = {"query": query, "top_k": top_k}
+    result = (
+        await tool_callback.ainvoke_tool(crawl_tool, arguments)
+        if tool_callback is not None
+        else await crawl_tool.ainvoke(arguments)
+    )
     result_text = str(result).strip()
     if not result_text or result_text.startswith("爬取新闻时出错"):
         raise RuntimeError(f"crawl_news failed: {result_text or 'empty result'}")
@@ -95,6 +106,7 @@ async def news_agent(state: AgentState) -> AgentState:
     # 获取执行日志记录器，用于记录 Agent的执行过程
     execution_logger = get_execution_logger()
     agent_name = "news_agent"
+    tool_callback = ExecutionToolCallback(agent_name, execution_logger)
 
     # 从状态中提取当前数据、消息和元数据
     current_data = state.get("data", {})
@@ -180,7 +192,8 @@ async def news_agent(state: AgentState) -> AgentState:
             news_query = build_news_query(company_name)
             logger.info(f"{WAIT_ICON} NewsAgent: Calling crawl_news exactly once...")
             crawled_news = await invoke_news_crawl_once(
-                crawl_tool, news_query, top_k=10
+                crawl_tool, news_query, top_k=10,
+                tool_callback=tool_callback,
             )
 
             logger.info(f"{WAIT_ICON} NewsAgent: Creating ReAct agent...")
@@ -206,7 +219,9 @@ async def news_agent(state: AgentState) -> AgentState:
             }
 
             # 调用 Agent执行分析
-            response = await agent.ainvoke(input_data)
+            response = await invoke_react_with_tool_logging(
+                agent, input_data, tool_callback
+            )
 
             end_time = time.time()
             execution_time = end_time - start_time

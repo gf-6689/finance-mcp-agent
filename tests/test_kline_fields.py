@@ -9,6 +9,9 @@ sys.path.insert(0, str(MCP_ROOT))
 
 from src.baostock_data_source import resolve_k_fields
 
+for module_name in [name for name in sys.modules if name == "src" or name.startswith("src.")]:
+    sys.modules.pop(module_name)
+
 
 DAILY_ONLY_FIELDS = {
     "preclose",

@@ -20,6 +20,7 @@ start_node → [fundamental_analyst, technical_analyst, value_analyst] → summa
 # 在导入其他模块之前设置环境变量，抑制无用输出
 import os
 import sys
+import time
 
 # 设置环境变量来抑制transformers和其他库的冗余输出
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # 只显示错误信息
@@ -84,6 +85,24 @@ logger.info(
 logger = setup_logger(__name__)
 
 
+def complete_main_log(
+    execution_logger,
+    started_at: float,
+    success: bool,
+    report_path: str | None = None,
+    error: str | None = None,
+) -> None:
+    """在整体汇总前结束 Main 的执行记录。"""
+    execution_time = max(0.0, time.monotonic() - started_at)
+    output_data = {
+        "report_path": report_path,
+        "total_execution_time": execution_time,
+    }
+    execution_logger.log_agent_complete(
+        "main", output_data, execution_time, success=success, error=error
+    )
+
+
 async def main():
     """
     主函数：金融分析智能体系统的核心执行逻辑
@@ -99,6 +118,7 @@ async def main():
     """
     
     # 初始化执行日志系统
+    main_started_at = time.monotonic()
     execution_logger = initialize_execution_logger()
     logger.info(
         f"{SUCCESS_ICON} 执行日志系统已初始化，日志目录: {execution_logger.execution_dir}")
@@ -488,6 +508,7 @@ async def main():
         # 7. 结果处理和报告生成
         # ============================================================================
         
+        report_path = None
         # 提取并打印最终报告
         if final_state and final_state.get("data") and "final_report" in final_state["data"]:
             print("\n--- 最终分析报告 (Final Analysis Report) ---\n")
@@ -495,6 +516,7 @@ async def main():
 
             # 显示报告文件路径（如果可用）
             if "report_path" in final_state["data"]:
+                report_path = final_state["data"]["report_path"]
                 print(
                     f"\n{SUCCESS_ICON} 报告已保存到: {final_state['data']['report_path']}")
                 logger.info(
@@ -512,6 +534,12 @@ async def main():
             print("调试信息 - 最终状态内容:", final_state)
 
         # 完成执行日志记录
+        complete_main_log(
+            execution_logger,
+            started_at=main_started_at,
+            success=True,
+            report_path=report_path,
+        )
         finalize_execution_logger(success=True)
         print(f"{SUCCESS_ICON} 执行日志已保存到: {execution_logger.execution_dir}")
 
@@ -524,8 +552,15 @@ async def main():
         logger.error(f"Error during workflow execution: {e}", exc_info=True)
 
         # 记录错误并完成执行日志
+        execution_dir = execution_logger.execution_dir
+        complete_main_log(
+            execution_logger,
+            started_at=main_started_at,
+            success=False,
+            error=str(e),
+        )
         finalize_execution_logger(success=False, error=str(e))
-        print(f"{ERROR_ICON} 错误日志已保存到: {get_execution_logger().execution_dir}")
+        print(f"{ERROR_ICON} 错误日志已保存到: {execution_dir}")
 
 
 # ============================================================================

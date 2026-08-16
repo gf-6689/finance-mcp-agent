@@ -5,6 +5,8 @@ import pytest
 
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
+for module_name in [name for name in sys.modules if name == "src" or name.startswith("src.")]:
+    sys.modules.pop(module_name)
 sys.path.insert(0, str(AGENT_ROOT))
 
 from src.agents.news_agent import (

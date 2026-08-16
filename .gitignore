@@ -35,3 +35,6 @@ qwen_sentiment_model/
 # Generated reports and execution logs
 Financial-MCP-Agent/logs/
 Financial-MCP-Agent/reports/
+
+# Isolated development worktrees
+/.worktrees/

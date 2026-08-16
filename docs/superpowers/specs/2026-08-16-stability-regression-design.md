@@ -1,176 +1,120 @@
-# Stability Regression Fix Design
+# 稳定性回归修复设计
 
-## Objective
+## 目标
 
-Make the end-to-end financial analysis run complete without genuine `ERROR`
-records while preserving the existing report workflow and public MCP tool
-interfaces.
+在保留现有报告工作流和 MCP 工具公开接口的前提下，使端到端金融分析运行不再产生真实的 `ERROR` 记录。
 
-The change addresses four verified defects from execution
-`20260816_165014_ef2b91d9`:
+本次修改处理执行记录 `20260816_165014_ef2b91d9` 中已经确认的四个缺陷：
 
-1. Monthly K-line requests inherit daily-only default fields and receive
-   Baostock error `10004012`.
-2. One News Agent run invokes `crawl_news` three times in parallel, causing
-   three independent MCP subprocesses to load duplicate QLoRA models.
-3. The execution logger leaves the `main` record in `started` state, so the
-   summary reports it as failed even when the workflow succeeds.
-4. MCP tool calls are not connected to `ExecutionLogger.log_tool_usage`, so
-   `tools_used_count` remains zero.
+1. 月线 K 线请求继承仅适用于日线的默认字段，导致 Baostock 返回 `10004012`。
+2. 一次新闻 Agent 运行并发调用三次 `crawl_news`，导致三个独立 MCP 子进程重复加载 QLoRA 模型。
+3. 执行日志没有结束 `main` 记录，因此即使工作流成功，摘要仍将 `main` 标记为失败。
+4. MCP 工具调用没有接入 `ExecutionLogger.log_tool_usage`，导致 `tools_used_count` 始终为零。
 
-## Safety and Recovery
+## 安全与恢复
 
-- The pre-change commit is `e8b7e94e0469ac997ccbc4185e52570d37713249`.
-- The remote recovery branch is
-  `backup/pre-stability-fixes-20260816` and points to that exact commit.
-- Implementation occurs on `fix/stability-regression`; `main` remains unchanged
-  until targeted tests and a full regression pass.
-- Model weights, datasets, reports, logs, and `.env` remain untracked.
+- 修改前提交：`e8b7e94e0469ac997ccbc4185e52570d37713249`。
+- 远端恢复分支：`backup/pre-stability-fixes-20260816`，精确指向上述提交。
+- 后续实现在 `fix/stability-regression` 分支进行；在针对性测试和完整回归通过前，`main` 保持不变。
+- 模型权重、数据集、报告、日志和 `.env` 继续保持未跟踪状态。
 
-## Architecture
+## 架构设计
 
-### 1. Frequency-aware K-line fields
+### 1. 按频率选择 K 线字段
 
-Add a small pure function in the Baostock data-source module that resolves
-the effective field list from `frequency` and the caller-supplied `fields`.
+在 Baostock 数据源模块增加纯函数，根据 `frequency` 和调用者传入的 `fields` 解析最终字段列表。
 
-- Daily data (`d`, `5`, `15`, `30`, `60`) retains the existing full default
-  field list.
-- Weekly and monthly data (`w`, `m`) use Baostock's supported aggregate fields:
-  `date`, `code`, `open`, `high`, `low`, `close`, `volume`, `amount`, and
-  `adjustflag`.
-- Explicit weekly/monthly fields are validated before the network call. An
-  unsupported field produces a local `ValueError` naming the invalid fields,
-  rather than a remote Baostock `10004012` error.
-- The public `get_historical_k_data` signature does not change.
+- 日线及分钟线（`d`、`5`、`15`、`30`、`60`）继续使用现有完整默认字段。
+- 周线和月线（`w`、`m`）仅使用 Baostock 支持的聚合字段：`date`、`code`、`open`、`high`、`low`、`close`、`volume`、`amount`、`adjustflag`。
+- 网络调用前验证显式周线/月线字段。不支持的字段在本地抛出 `ValueError` 并列明非法字段，不再发送会触发 `10004012` 的请求。
+- `get_historical_k_data` 的公开签名保持不变。
 
-### 2. Exactly one news crawl per News Agent run
+### 2. 每次新闻 Agent 只爬取一次
 
-The News Agent will split acquisition from synthesis:
+新闻 Agent 将数据获取与综合分析拆开：
 
-1. Obtain the cached MCP tool list.
-2. Locate `crawl_news` by name.
-3. Invoke it exactly once with one combined query containing the company name,
-   latest news, stock performance, earnings, and industry context.
-4. Put the returned, already risk/sentiment-scored news text into the LLM input.
-5. Remove `crawl_news` from the ReAct tool list used for subsequent synthesis.
-6. Keep other MCP tools available so the LLM can request supporting market
-   data when needed.
+1. 获取缓存的 MCP 工具列表并按名称找到 `crawl_news`。
+2. 使用覆盖公司名称、最新新闻、股价表现、业绩和行业动态的组合查询词，仅调用一次该工具。
+3. 将已经包含风险和情感评分的返回文本放入 LLM 输入。
+4. 从后续 ReAct 工具列表中移除 `crawl_news`，但保留其他行情工具。
 
-If the single crawl fails or returns an empty/error result, News Agent records
-the failure and stops instead of silently asking the ReAct loop to retry and
-load more model processes.
+如果唯一一次爬取失败或返回空结果/错误结果，新闻 Agent 明确记录失败并停止，不允许 ReAct 循环隐式重试。
 
-This guarantees only one MCP subprocess loads the risk and sentiment adapters
-for a News Agent execution. It deliberately avoids a new inference service or
-cross-process cache.
+这样可保证一次新闻 Agent 执行只有一个 MCP 子进程加载风险和情感适配器。本次不引入额外推理服务或跨进程缓存。
 
-### 3. Tool-usage instrumentation
+### 3. 工具调用日志
 
-Add a LangChain callback handler dedicated to execution logging.
+增加专用于执行日志的 LangChain 回调处理器：
 
-- It records tool start time and input on `on_tool_start`.
-- It records output, duration, success, and error on `on_tool_end` or
-  `on_tool_error`.
-- Each Agent constructs the callback with its own `agent_name` and supplies it
-  in the ReAct invocation config.
-- The News Agent also records its one direct `crawl_news` invocation through
-  the same logging helper.
-- `tools_used_count` continues to be derived from JSONL records; no synthetic
-  count is introduced.
+- `on_tool_start` 记录工具输入和开始时间。
+- `on_tool_end`、`on_tool_error` 记录输出、耗时、成功状态和错误。
+- 每个 Agent 使用自己的 `agent_name` 创建回调，并通过 ReAct 配置传入。
+- 新闻 Agent 的一次直接 `crawl_news` 调用也使用同一日志辅助接口。
+- `tools_used_count` 继续根据 JSONL 记录计算，不生成虚假计数。
+- 并发调用使用各自的运行标识保存开始时间，避免互相覆盖耗时。
 
-Concurrent calls must use per-run identifiers rather than a single shared
-start timestamp so durations cannot overwrite each other.
+### 4. Main 执行生命周期
 
-### 4. Main execution lifecycle
+- 成功路径在汇总整体执行前调用 `log_agent_complete("main", ...)`。
+- 异常路径也先调用该方法并传入 `success=False`，再汇总失败执行。
+- 成功时记录 Main 总耗时和报告路径；失败时记录总耗时和异常文本。
+- 每次运行只执行一次最终汇总。
 
-The main workflow will close its execution record explicitly:
+修复后，可读摘要必须显示 `main` 成功且耗时大于零。
 
-- On success, call `log_agent_complete("main", ...)` before finalizing the
-  overall execution.
-- On an exception, call the same method with `success=False` before finalizing
-  the failure.
-- Record total main duration, report path on success, and exception text on
-  failure.
-- Ensure finalization happens once per run.
-
-The readable summary should then show `main: success` with a non-zero duration.
-
-## Data Flow
+## 数据流
 
 ```text
-user query
-  -> News Agent
-  -> one direct crawl_news invocation
-  -> one MCP subprocess
-  -> one risk model + one sentiment model load
-  -> scored news text
-  -> ReAct synthesis without crawl_news
-  -> news analysis
-  -> Summary Agent
-  -> final report
+用户查询
+  -> 新闻 Agent
+  -> 一次直接 crawl_news 调用
+  -> 一个 MCP 子进程
+  -> 各加载一份风险模型和情感模型
+  -> 带评分的新闻文本
+  -> 不含 crawl_news 的 ReAct 综合分析
+  -> 新闻分析结果
+  -> 汇总 Agent
+  -> 最终报告
 ```
 
-The other three analysis Agents retain their current ReAct workflows. Their
-tool calls receive logging callbacks but no behavioral changes.
+另外三个分析 Agent 保留当前 ReAct 工作流。它们仅接入工具日志回调，业务行为不变。
 
-## Error Handling
+## 错误处理
 
-- Unsupported weekly/monthly fields fail locally with a precise validation
-  message.
-- Missing `crawl_news` is a News Agent failure with an explicit error.
-- A failed direct crawl is recorded as a failed tool use and a failed News
-  Agent execution; it is not retried implicitly.
-- Callback logging failures must not break financial analysis. They are caught
-  and emitted as logger warnings.
-- Expected Baostock empty results for unpublished quarters remain warnings, not
-  fatal errors.
+- 不支持的周线/月线字段在本地失败并返回精确验证信息。
+- 找不到 `crawl_news` 时，新闻 Agent 明确失败并记录原因。
+- 直接爬取失败时，记录失败的工具调用和新闻 Agent 执行，不进行隐式重试。
+- 回调日志异常不能中断金融分析；捕获后记为警告。
+- Baostock 尚无未披露季度数据时继续记为警告，不视为致命错误。
 
-## Tests
+## 测试设计
 
-### Targeted unit tests
+每项生产代码修改前必须先编写能够复现缺陷的失败测试。
 
-1. Daily default fields still include daily valuation and price fields.
-2. Monthly and weekly defaults exclude `preclose`, `peTTM`, `pbMRQ`, `psTTM`,
-   `pcfNcfTTM`, `turn`, `tradestatus`, `pctChg`, and `isST`.
-3. Valid explicit monthly fields are accepted.
-4. Invalid explicit monthly fields fail before calling Baostock.
-5. News Agent invokes `crawl_news` once, removes it from ReAct tools, and embeds
-   its result in the synthesis prompt.
-6. Direct crawl failure is logged and does not invoke the ReAct agent.
-7. Concurrent callback tool events produce one JSONL entry per completed call.
-8. Main success and failure paths both complete the `main` execution record.
-9. Generated execution summary reports a non-zero tool count and correct main
-   status.
+针对性测试覆盖：
 
-Each production change must be preceded by a failing test that demonstrates
-the verified defect.
+1. 日线默认字段仍包含日线价格与估值字段。
+2. 月线和周线默认字段排除 `preclose`、`peTTM`、`pbMRQ`、`psTTM`、`pcfNcfTTM`、`turn`、`tradestatus`、`pctChg`、`isST`。
+3. 合法显式月线字段通过，非法字段在调用 Baostock 前失败。
+4. 新闻 Agent 只调用一次 `crawl_news`，从 ReAct 工具中移除它，并将结果写入综合分析提示词。
+5. 直接爬取失败会被记录，且不会调用 ReAct Agent。
+6. 并发工具回调每完成一次调用产生一条 JSONL 记录。
+7. Main 成功和失败路径都会结束 `main` 执行记录。
+8. 执行摘要包含非零工具计数和正确的 Main 状态。
 
-### Integration checks
+集成检查包括：编译修改模块、运行针对性测试、进行一次最小 Baostock 日线/月线测试，以及一次完整 `python -m src.main` 回归。
 
-- Compile all modified Python modules.
-- Run all targeted tests.
-- Run a minimal Baostock daily/monthly field test without repeated login.
-- Run one complete `python -m src.main` regression.
-- Require exit code zero, all Agents successful, complete report above 10 KB,
-  `tools_used_count > 0`, `main` successful with non-zero duration, exactly one
-  risk-model success and one sentiment-model success, and no genuine `ERROR`
-  records.
+## 验收标准
 
-## Acceptance Criteria
+只有全新的完整回归同时证明以下条件，才算修复完成：
 
-The repair is complete only when a fresh full regression proves all of the
-following:
-
-- `MAIN_EXIT=0`.
-- Overall execution has `success: true` and `error: null`.
-- Main and all five business Agents report success.
-- The final report is complete and larger than 10 KB.
-- Monthly K-line calls do not emit Baostock field error `10004012`.
-- One News Agent execution invokes `crawl_news` exactly once.
-- The run logs exactly one successful risk-model load and one successful
-  sentiment-model load, with no model-load error.
-- `tools_used_count` is greater than zero and matches persisted tool records.
-- The fresh run log contains no genuine `ERROR` or traceback.
-- The worktree is clean after committing, and the repair commit is pushed only
-  after verification.
+- `MAIN_EXIT=0`。
+- 整体执行为 `success: true` 且 `error: null`。
+- Main 和五个业务 Agent 全部成功。
+- 最终报告章节完整且大于 10 KB。
+- 月线调用不再出现 Baostock 字段错误 `10004012`。
+- 一次新闻 Agent 执行只调用一次 `crawl_news`。
+- 风险模型和情感模型各成功加载一次，且没有模型加载错误。
+- `tools_used_count` 大于零，并与持久化工具记录条数一致。
+- 新运行日志不包含真实 `ERROR` 或 traceback。
+- 提交后工作区干净，只在验证通过后推送修复提交。

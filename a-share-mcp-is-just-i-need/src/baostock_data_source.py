@@ -40,6 +40,27 @@ DEFAULT_K_FIELDS = [
     "isST"         # 是否ST股票
 ]
 
+# Baostock 周线和月线只支持聚合行情字段，不支持日线估值和状态字段。
+AGGREGATE_K_FIELDS = [
+    "date", "code", "open", "high", "low", "close",
+    "volume", "amount", "adjustflag",
+]
+
+
+def resolve_k_fields(frequency: str, fields: Optional[List[str]]) -> str:
+    """按 K 线频率解析字段，并在请求 Baostock 前拒绝不兼容字段。"""
+    allowed_fields = (
+        AGGREGATE_K_FIELDS if frequency in {"w", "m"} else DEFAULT_K_FIELDS
+    )
+    selected_fields = fields or allowed_fields
+    invalid_fields = sorted(set(selected_fields) - set(allowed_fields))
+    if invalid_fields:
+        invalid_text = ", ".join(invalid_fields)
+        raise ValueError(
+            f"Unsupported fields for frequency '{frequency}': {invalid_text}"
+        )
+    return format_fields(selected_fields, allowed_fields)
+
 # 股票基本信息的默认字段
 DEFAULT_BASIC_FIELDS = [
     "code",        # 股票代码
@@ -148,7 +169,7 @@ class BaostockDataSource(FinancialDataSource):
         
         try:
             # 格式化请求字段，如果未指定则使用默认K线字段
-            formatted_fields = self._format_fields(fields, DEFAULT_K_FIELDS)
+            formatted_fields = resolve_k_fields(frequency, fields)
             logger.debug(
                 f"Requesting fields from Baostock: {formatted_fields}")
 

@@ -3,13 +3,24 @@
 包含生成股票分析报告的工具
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
 from src.data_source_interface import FinancialDataSource
 from src.formatting.markdown_formatter import format_df_to_markdown
 
 logger = logging.getLogger(__name__)
+
+
+def latest_disclosed_financial_period(as_of: date) -> tuple[int, int]:
+    """按法定披露窗口返回保守可用的最近财务季度。"""
+    if as_of.month <= 4:
+        return as_of.year - 1, 3
+    if as_of.month <= 8:
+        return as_of.year, 1
+    if as_of.month <= 10:
+        return as_of.year, 2
+    return as_of.year, 3
 
 
 def register_analysis_tools(app: FastMCP, active_data_source: FinancialDataSource):
@@ -44,11 +55,10 @@ def register_analysis_tools(app: FastMCP, active_data_source: FinancialDataSourc
             # 根据分析类型获取不同数据
             if analysis_type in ["fundamental", "comprehensive"]:
                 # 获取最近一个季度财务数据
-                recent_year = datetime.now().strftime("%Y")
-                recent_quarter = (datetime.now().month - 1) // 3 + 1
-                if recent_quarter < 1:  # 处理年初可能出现的边界情况
-                    recent_year = str(int(recent_year) - 1)
-                    recent_quarter = 4
+                recent_year, recent_quarter = latest_disclosed_financial_period(
+                    datetime.now().date()
+                )
+                recent_year = str(recent_year)
 
                 profit_data = active_data_source.get_profit_data(
                     code=code, year=recent_year, quarter=recent_quarter)

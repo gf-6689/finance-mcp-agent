@@ -25,6 +25,60 @@ load_dotenv(override=True)
 logger = setup_logger(__name__)
 
 
+def partition_news_tools(tools):
+    """取出唯一的新闻爬取工具，避免 ReAct 循环再次调用它。"""
+    crawl_tools = [tool for tool in tools if tool.name == "crawl_news"]
+    if len(crawl_tools) != 1:
+        raise RuntimeError(
+            f"Expected exactly one crawl_news tool, found {len(crawl_tools)}"
+        )
+    remaining_tools = [tool for tool in tools if tool.name != "crawl_news"]
+    return crawl_tools[0], remaining_tools
+
+
+def build_news_query(company_name: str) -> str:
+    """构造覆盖主要新闻维度的单一查询词。"""
+    return f"{company_name} 最新新闻 股价 业绩 行业动态"
+
+
+async def invoke_news_crawl_once(crawl_tool, query: str, top_k: int = 10) -> str:
+    """调用一次新闻爬取工具，并把空结果或工具错误转成明确失败。"""
+    result = await crawl_tool.ainvoke({"query": query, "top_k": top_k})
+    result_text = str(result).strip()
+    if not result_text or result_text.startswith("爬取新闻时出错"):
+        raise RuntimeError(f"crawl_news failed: {result_text or 'empty result'}")
+    return result_text
+
+
+def build_news_agent_input(
+    company_name: str,
+    stock_code: str,
+    current_time_info: str,
+    current_date: str,
+    crawled_news: str,
+) -> str:
+    """把唯一一次抓取结果嵌入新闻综合分析提示词。"""
+    return f"""请对{company_name}（股票代码：{stock_code}）进行新闻分析。
+
+当前时间：{current_time_info}
+当前日期：{current_date}
+
+以下是 crawl_news 唯一一次调用返回的真实新闻数据，其中已经包含情感和风险评分：
+
+--- 新闻数据开始 ---
+{crawled_news}
+--- 新闻数据结束 ---
+
+请完成以下分析：
+1. 筛选至少5条与公司最相关的新闻
+2. 汇总每条新闻已有的情感评分和风险评分
+3. 分析新闻对股价的潜在影响
+4. 识别关键新闻事件和趋势
+5. 提供基于新闻的综合投资建议
+
+不要再次调用新闻爬取工具。可以按需使用其他行情或公司信息工具补充分析。"""
+
+
 async def news_agent(state: AgentState) -> AgentState:
     """
     使用ReAct框架进行新闻分析，包含情感分析和风险评估，直接集成MCP工具
@@ -116,36 +170,32 @@ async def news_agent(state: AgentState) -> AgentState:
             tool_names = [tool.name for tool in mcp_tools]
             logger.info(f"Available tools: {tool_names}")
 
-            # 3. 创建ReAct Agent - 只传入LLM和工具
-            logger.info(
-                f"{WAIT_ICON} NewsAgent: Creating ReAct agent...")
-            agent = create_react_agent(llm, mcp_tools)
-
-            # 4. 准备输入数据，构建详细的新闻分析请求
+            # 3. 先且仅先调用一次新闻爬取，再从ReAct工具中移除crawl_news
             stock_code = current_data.get('stock_code', 'Unknown')
             company_name = current_data.get('company_name', 'Unknown')
             current_time_info = current_data.get('current_time_info', '未知时间')
             current_date = current_data.get('current_date', '未知日期')
 
-            # 构建详细的新闻分析请求，包含多个分析维度
-            agent_input = f"""请对{company_name}（股票代码：{stock_code}）进行新闻分析。
+            crawl_tool, react_tools = partition_news_tools(mcp_tools)
+            news_query = build_news_query(company_name)
+            logger.info(f"{WAIT_ICON} NewsAgent: Calling crawl_news exactly once...")
+            crawled_news = await invoke_news_crawl_once(
+                crawl_tool, news_query, top_k=10
+            )
 
-当前时间：{current_time_info}
-当前日期：{current_date}
-
-请进行以下新闻分析：
-1. 爬取与{company_name}相关的最新新闻（至少5条）
-2. 对每条新闻进行情感分析，评估新闻对公司的情感影响（1-5分：1=负面，2=轻微负面，3=中性，4=正面，5=极正面）
-3. 对每条新闻进行风险评估，评估新闻对公司的风险影响（1-5分：1=极低风险，2=低风险，3=中等风险，4=高风险，5=极高风险）
-4. 分析新闻对股价的潜在影响
-5. 识别关键新闻事件和趋势
-6. 提供基于新闻的综合投资建议
-
-请使用可用的工具获取实际新闻数据进行分析，确保情感分析和风险评估的准确性。如果某些新闻无法获取，请基于可用信息提供尽可能全面的分析。"""
+            logger.info(f"{WAIT_ICON} NewsAgent: Creating ReAct agent...")
+            agent = create_react_agent(llm, react_tools)
+            agent_input = build_news_agent_input(
+                company_name=company_name,
+                stock_code=stock_code,
+                current_time_info=current_time_info,
+                current_date=current_date,
+                crawled_news=crawled_news,
+            )
 
             logger.info(f"Agent input: {agent_input}")
 
-            # 5. 调用ReAct Agent - 使用正确的messages格式
+            # 4. 调用ReAct Agent - 使用正确的messages格式
             logger.info(
                 f"{WAIT_ICON} NewsAgent: Calling ReAct agent...")
             start_time = time.time()

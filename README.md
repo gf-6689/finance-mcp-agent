@@ -10,51 +10,142 @@ Finance/
 ├── a-share-mcp-is-just-i-need/   # A 股 MCP 数据服务
 ├── risk_nasdaq/                  # 风险分析训练数据
 ├── nasdaq_news_sentiment/        # 情感分析训练数据
-├── train_qwen_risk.py            # 风险 LoRA 训练脚本
-└── train_qwen_sentiment.py       # 情感 LoRA 训练脚本
+├── Qwen/                         # Qwen3-8B 基座模型（本地可选）
+├── qwen_risk_model/              # 风险 QLoRA adapter
+├── qwen_sentiment_model/         # 情感 QLoRA adapter
+├── train_qwen_risk.py            # 风险 QLoRA 训练脚本
+└── train_qwen_sentiment.py       # 情感 QLoRA 训练脚本
 ```
 
-## 推荐运行路线
+Qwen、adapter、checkpoint 和训练数据体积较大，可按是否需要本地新闻分析选择性准备。API 模式不需要 Fin-R1。
 
-第一次部署请使用 API 模式：
+## 1. 准备环境
 
-1. 创建 Python 3.12 环境并安装依赖。
-2. 复制 `.env.example` 为 `Financial-MCP-Agent/.env`，填入真实的 OpenAI-compatible API 配置。
-3. 将 `Financial-MCP-Agent/src/tools/mcp_config.py` 中的 MCP 启动命令改为服务器上的实际 Python 与 `mcp_server.py` 路径。
-4. 先测试查询提取和 MCP 数据服务，再启动完整 Agent。
+以下命令默认在仓库根目录 `Finance/` 执行。建议使用 Python 3.12 和独立虚拟环境：
 
-API 模式的核心环境变量：
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
+每次新开终端后，都要先在仓库根目录激活虚拟环境：
+
+```bash
+source .venv/bin/activate
+```
+
+不要直接使用未安装项目依赖的系统 Python 或 Conda 基础环境，否则可能出现 `ModuleNotFoundError`。
+
+## 2. 配置 API
+
+首次部署建议先使用 API 模式跑通全链路：
+
+```bash
+cp Financial-MCP-Agent/.env.example Financial-MCP-Agent/.env
+```
+
+然后编辑 `Financial-MCP-Agent/.env`：
 
 ```dotenv
 OPENAI_COMPATIBLE_API_KEY=实际密钥
-OPENAI_COMPATIBLE_BASE_URL=实际兼容地址
+OPENAI_COMPATIBLE_BASE_URL=实际 OpenAI-compatible API 地址
 OPENAI_COMPATIBLE_MODEL=支持工具调用的模型名
 USE_LOCAL_MODEL=api
 ```
 
-不要将真实 `.env`、API Key、SSH 私钥、模型权重、日志或生成报告提交到 Git。
+API 模式下五个 Agent 都使用上述接口。项目可配置 DeepSeek 或其他兼容服务，但所选模型需要支持项目使用的工具调用方式。
 
-## 启动命令
+## 3. MCP 配置
 
-完成服务器环境与 MCP 路径配置后，从主程序目录运行：
+无需手工修改 `Financial-MCP-Agent/src/tools/mcp_config.py`。当前配置会：
+
+- 使用 `sys.executable` 启动 MCP，复用当前已激活的 `.venv` Python；
+- 根据配置文件位置动态推导仓库根目录；
+- 直接启动 `a-share-mcp-is-just-i-need/mcp_server.py`。
+
+MCP 子目录只有 `uv.lock` 而没有 `pyproject.toml`，因此不要使用旧版文档中的 `uv run --directory ...` 配置。
+
+## 4. 运行测试
+
+### 仓库回归测试
+
+在仓库根目录执行：
+
+```bash
+python -m pytest tests Financial-MCP-Agent/tests -q
+```
+
+这些测试覆盖 K 线字段、财报期选择、MCP 路径、新闻抓取去重、工具日志和主程序执行日志。
+
+### Baostock/MCP 数据测试
+
+```bash
+python a-share-mcp-is-just-i-need/test_baostock.py
+```
+
+该测试需要联网访问 Baostock，可能因限流、黑名单或网络波动失败。网络类失败不代表本地依赖或 MCP 路径一定存在问题。
+
+### QLoRA adapter 测试
+
+已准备 Qwen 基座模型和两个 adapter 时，可执行：
+
+```bash
+python test_risk_model.py
+python test_qwen_sentiment.py
+```
+
+这两个脚本会加载大模型并占用 GPU 显存，不属于快速 pytest 回归测试。
+
+## 5. 启动完整 Agent
+
+保持 `.venv` 处于激活状态，然后从主程序目录以模块方式启动：
 
 ```bash
 cd Financial-MCP-Agent
 python -m src.main --command "帮我看看茅台(600519)这只股票值得投资吗"
 ```
 
-生成的 Markdown 报告位于 `Financial-MCP-Agent/reports/`。
+内部导入使用 `from src...`，因此建议保持上述启动目录和 `python -m src.main` 形式，无需额外设置 `PYTHONPATH`。
 
-## 本地模型说明
+生成的 Markdown 报告位于：
 
-- `USE_LOCAL_MODEL=local` 目前只影响 Summary Agent，其余 Agent 仍需要 API。
-- Fin-R1、Qwen3-8B、LoRA adapter 和训练 checkpoint 不应提交到 GitHub。
-- 当前风险与情感脚本是普通 LoRA，不是 4-bit QLoRA；24GB GPU 训练前需要进一步改造。
-- 当前新闻分析会分别加载风险与情感模型。24GB GPU 不适合同时保留两个独立的 FP16 8B 基座。
+```text
+Financial-MCP-Agent/reports/
+```
 
-## 当前已知部署注意事项
+完整运行会调用外部 API 和联网数据源，需要考虑 API 费用、账户额度和数据源可用性。
 
-- MCP 子目录目前有 `uv.lock`，但没有 `pyproject.toml`；部署时应直接调用虚拟环境中的 Python 启动 `mcp_server.py`。
-- 训练脚本中的模型路径和数据路径需要改成服务器实际路径。
-- `requirements.txt` 尚未完整覆盖所有训练和 MCP 依赖，服务器部署时需要按部署指南补装。
+## 6. 本地 Fin-R1 汇总模型（可选）
 
+如果已将 Fin-R1 放在仓库根目录的 `FinR1/` 中，可将 `.env` 改为：
+
+```dotenv
+USE_LOCAL_MODEL=local
+```
+
+该选项只会让 Summary Agent 使用本地 Fin-R1。基本面、技术面、估值和新闻四个 Agent 仍使用 OpenAI-compatible API，因此仍须保留有效的 API 配置。
+
+没有下载 Fin-R1 时，请保持 `USE_LOCAL_MODEL=api`。
+
+## 7. QLoRA 训练说明（可选）
+
+风险与情感训练脚本当前使用 4-bit QLoRA，量化配置为 `load_in_4bit=True`、NF4、bfloat16 计算和 double quant。
+
+| 用途 | 训练脚本 | 输出目录 | 测试脚本 |
+|---|---|---|---|
+| 风险分析 | `train_qwen_risk.py` | `qwen_risk_model/` | `test_risk_model.py` |
+| 情感分析 | `train_qwen_sentiment.py` | `qwen_sentiment_model/` | `test_qwen_sentiment.py` |
+
+两个训练脚本默认从 `/root/autodl-tmp/Finance/Qwen` 加载基座模型，数据分别来自 `risk_nasdaq/` 和 `nasdaq_news_sentiment/`。如果仓库部署在其他位置，训练前需要更改训练脚本中的本地模型路径。
+
+训练数据主要是英文 Nasdaq 新闻。本地模型分析中文新闻时可能输出不稳定或触发“无法分析”兜底，现场演示前建议使用中文样本单独验证。
+
+## 安全与部署注意事项
+
+- 不要将真实 `.env`、API Key、SSH 私钥、日志、生成报告、数据集或模型权重提交到 Git。
+- 复制仓库后，应在新虚拟环境中安装依赖并执行 `python -m pip check`。当前机器通过检查不代表任意平台与 Python 版本都一定兼容。
+- RTX 50 系列或其他新 GPU 需要使用与 CUDA 驱动匹配的 PyTorch、bitsandbytes 和 Transformers 版本。
+- Baostock 和新闻网页是外部数据源，结果会受交易日、公告披露、限流和页面变更影响。

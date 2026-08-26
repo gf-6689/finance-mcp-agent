@@ -1,10 +1,13 @@
 """Build reproducible time-based dataset splits."""
 
+import csv
 import hashlib
 import math
 import unicodedata
+from collections import Counter
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 
 def normalize_text(value: str) -> str:
@@ -150,3 +153,64 @@ def clean_raw_row(
         "_original_row_id": original_row_id,
     }
     return record, ()
+
+
+def load_and_clean_csv(
+    source_path: str | Path,
+    *,
+    label_column: str,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Load a source CSV and aggregate row-cleaning statistics."""
+    records = []
+    reason_counts: Counter[str] = Counter()
+    raw_rows = 0
+
+    with Path(source_path).open(
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as handle:
+        reader = csv.DictReader(handle)
+
+        required_columns = (
+            "Date",
+            "Article_title",
+            "Lsa_summary",
+            "Stock_symbol",
+            label_column,
+        )
+        available_columns = set(reader.fieldnames or ())
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in available_columns
+        ]
+
+        if missing_columns:
+            raise ValueError(
+                "Missing required CSV columns: "
+                + ", ".join(missing_columns)
+            )
+
+        for original_row_id, raw_row in enumerate(reader):
+            raw_rows += 1
+            record, reasons = clean_raw_row(
+                raw_row,
+                label_column=label_column,
+                original_row_id=original_row_id,
+            )
+
+            if reasons:
+                reason_counts.update(reasons)
+                continue
+
+            if record is not None:
+                records.append(record)
+
+    stats = {
+        "raw_rows": raw_rows,
+        "rows_after_cleaning": len(records),
+        "dropped_rows": raw_rows - len(records),
+        "reason_counts": dict(sorted(reason_counts.items())),
+    }
+    return records, stats

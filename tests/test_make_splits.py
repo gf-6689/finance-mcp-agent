@@ -1,5 +1,8 @@
+import csv
 import importlib
 from datetime import date
+
+import pytest
 
 
 def test_normalize_text_uses_nfkc_casefold_and_collapses_whitespace():
@@ -198,3 +201,97 @@ def test_clean_raw_row_reports_invalid_date_and_label():
         "invalid_date",
         "invalid_label",
     )
+
+
+def test_load_and_clean_csv_aggregates_records_and_reason_counts(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+    source_path = tmp_path / "risk.csv"
+
+    fieldnames = [
+        "Date",
+        "Article_title",
+        "Lsa_summary",
+        "Stock_symbol",
+        "Url",
+        "risk_deepseek",
+    ]
+    rows = [
+        {
+            "Date": "2023-01-01 00:00:00 UTC",
+            "Article_title": "Valid title",
+            "Lsa_summary": "Valid summary",
+            "Stock_symbol": "AAPL",
+            "Url": "https://example.com/valid",
+            "risk_deepseek": "4.0",
+        },
+        {
+            "Date": "2023-01-02 00:00:00 UTC",
+            "Article_title": "Missing summary",
+            "Lsa_summary": "",
+            "Stock_symbol": "MSFT",
+            "Url": "https://example.com/missing",
+            "risk_deepseek": "3.0",
+        },
+        {
+            "Date": "2023-01-03 00:00:00 UTC",
+            "Article_title": "Invalid label",
+            "Lsa_summary": "Summary",
+            "Stock_symbol": "NVDA",
+            "Url": "https://example.com/invalid",
+            "risk_deepseek": "0.0",
+        },
+    ]
+
+    with source_path.open(
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    assert hasattr(module, "load_and_clean_csv"), (
+        "load_and_clean_csv must be implemented"
+    )
+
+    records, stats = module.load_and_clean_csv(
+        source_path,
+        label_column="risk_deepseek",
+    )
+
+    assert len(records) == 1
+    assert records[0]["title"] == "valid title"
+    assert records[0]["_original_row_id"] == 0
+
+    assert stats == {
+        "raw_rows": 3,
+        "rows_after_cleaning": 1,
+        "dropped_rows": 2,
+        "reason_counts": {
+            "missing_summary": 1,
+            "invalid_label": 1,
+        },
+    }
+
+
+def test_load_and_clean_csv_rejects_missing_required_columns(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+    source_path = tmp_path / "missing-columns.csv"
+    source_path.write_text(
+        "Date,Article_title\n"
+        "2023-01-01 00:00:00 UTC,Title\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Missing required CSV columns: "
+            "Lsa_summary, Stock_symbol, risk_deepseek"
+        ),
+    ):
+        module.load_and_clean_csv(
+            source_path,
+            label_column="risk_deepseek",
+        )

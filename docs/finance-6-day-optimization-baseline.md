@@ -1,9 +1,12 @@
-# A 股金融项目 6 天优化执行基线（修订版）
+# A 股金融项目 6 天优化执行基线（简历证据链版 v2）
 
 > 建立日期：2026-08-24  
-> 状态：**执行基线（后续所有优化工作以本文档为准）**  
+> 修订日期：2026-08-26
+> 状态：**唯一执行基线（后续所有优化工作以本文档为准）**  
 > 定位：目标是把项目补到“秋招简历可写、面试可解释”的程度，**不是**论文级评测。  
 > 默认版本：6 天。第 7 天仅作为 QLoRA 重训、失败重跑与收尾缓冲，**不扩大实验范围**。
+>
+> **Day 1 当前状态：规则已冻结，核心逻辑已通过测试；正式 CSV、manifest、report、spotcheck 生成并验收后，才标记为完成。**
 
 ---
 
@@ -16,7 +19,7 @@
 | ① TF-IDF+LR / Qwen Base / QLoRA 同评测集对比 | QLoRA 微调到底有没有用？ | 表 1（见 §5） |
 | ② Single-Agent / 5-Agent 同输入消融 | 为什么要 Multi-Agent？ | 表 2（见 §5） |
 
-**正常成功线：两张表的正式数字填满即停止。最低成功线：至少一个可信模型任务（Risk 优先）完整对比 + Agent 消融完整可追溯。**
+**最低成功线：Day 1 全部产物生成并验收 + Risk 的 TF-IDF+LR / Qwen3-8B Base / QLoRA 同协议对比 + 30 条 Agent Benchmark + `final_numbers.md` / README / 简历更新。Sentiment 不进入最低成功线。**
 
 ---
 
@@ -26,7 +29,7 @@
 
 1. 建立**可信、无完全重复样本泄漏、固定**的 Train / Val / Test 划分。
 2. 从 Test 中固定抽取一份 `eval_test.csv`，供 LR / Base / QLoRA 使用完全相同的评测样本。
-3. 得到模型对比表：LR vs Qwen3-8B Base vs QLoRA，Risk 为 P0，Sentiment 在进度允许时完成；主指标仅保留 Macro-F1 + MAE，附 Accuracy 与 Confusion Matrix。
+3. 得到模型对比表：LR vs Qwen3-8B Base vs QLoRA，Risk 为 P0；Sentiment 只在其他 P0 全部完成后有余力时执行。主指标仅保留 Macro-F1 + MAE，附 Accuracy 与 Confusion Matrix。
 4. 得到 Agent 系统级架构消融表：Single-Agent vs 5-Agent，使用 30 条固定问题、相同工具接口、相同 fixtures 数据；指标仅保留完整率、事实一致率、工具成功率、P50/P95 延迟。
 5. 产出可投递 README、3 张图和可直接写入简历的真实数字。
 
@@ -38,7 +41,7 @@
 - 200～500 条人工标注、双人标注、Cohen's Kappa
 - QWK、Bootstrap 置信区间、显著性检验、RMSE 等扩展指标
 - 60～100 条 Agent 问题
-- 大规模重复稳定性实验（最后有余力最多 5～10 条综合问题 × 3 次）
+- 大规模重复稳定性实验（Sentiment 之后仍有余力，最多 5～10 条综合问题 × 3 次）
 - 自动通用事实核验（只核验预先定义的固定数字字段）
 - Token Cost 统计
 - 大范围 QLoRA 超参数搜索
@@ -88,6 +91,12 @@
 
 7. **结论边界**  
    本轮只能声称“无完全重复样本泄漏，并通过时间切分降低事件泄漏风险”。未做事件级近似去重时，不得声称绝对“无数据泄漏”。
+
+8. **评分协议前置冻结**
+   Agent 正式运行前必须冻结 30 道题、fixtures、`required_sections`、`required_facts`、完整率判定规则、事实容差及失败处理。正式输出生成后不得修改题目、样本、评分规则或事实容差。
+
+9. **弱标注口径**
+   `risk_deepseek` / `sentiment_deepseek` 数据统一称为“清洗并构建的金融新闻弱标注数据”。没有真实人工标注流程和记录时，不得写成“人工标注约 10 万条”。
 
 ---
 
@@ -223,7 +232,9 @@ split_manifest.json
 - [ ] Train / Val / Test 不存在重复 `sample_id`
 - [ ] Test 按时间位于 Train / Val 之后
 - [ ] `eval_test.csv` 已固定
+- [ ] 正式 Train / Val / Test / eval_test CSV 已生成并验收
 - [ ] `split_manifest.json` 已提交 Git
+- [ ] `split_report.md` 与 `label_spotcheck.md` 已生成并验收
 - [ ] 分层抽查未发现该标签维度大面积不可用
 
 ### 不做
@@ -298,7 +309,7 @@ C ∈ {0.5, 1, 2}
 
 选择最优 C 后冻结。
 
-风险、情感分别训练。
+Risk 必须训练；Sentiment 仅在进度允许时训练。
 
 #### 4. 正式比较时使用相同 `eval_test.csv`
 
@@ -464,6 +475,15 @@ Base 与 QLoRA 唯一主要变量：
 - 6～10 只 A 股
 - 至少覆盖银行、消费、新能源、半导体、医药、周期、科技等多个行业
 
+正式冻结前必须完成人工审查：
+
+- 两种架构都能访问完成任务所需的全部工具
+- 题目不按现有 Multi-Agent 报告模板反向设计
+- 每个事实字段在 fixture 中真实存在，并已固定字段路径、日期、单位和容差
+- 完整率评分不依赖固定标题文字
+- smoke 题不进入正式 30 题
+- 评分规则在正式运行前冻结，正式输出生成后不得后验调题或调评分器
+
 #### 2. 每题明确评分要求
 
 `questions.jsonl` 每条必须包含：
@@ -554,6 +574,8 @@ Fixture Backend
 - [ ] 需要数字核验的题有 `required_facts`
 - [ ] Single / Multi 使用相同 Tool 接口和相同 fixtures
 - [ ] 正式运行不回退实时 MCP 数据
+- [ ] 题目、fixtures、评分规则和事实容差已在正式运行前冻结
+- [ ] 正式输出生成后未修改题目、样本、评分规则或事实容差
 
 ---
 
@@ -699,7 +721,7 @@ ToolSuccessRate=
 
 大规模重复运行稳定性实验。
 
-若最后还有时间：
+若 Sentiment 之后仍有余力：
 
 ```text
 5～10 条综合问题 × 3 次
@@ -770,6 +792,10 @@ Qwen3-8B + QLoRA
 - Agent Benchmark 数量
 - 简历可用数字
 - 面试一句话解释
+- 每个数字的来源文件和适用范围
+- fixture Benchmark 与真实线上/实时数据指标的边界
+- 历史性能提升所依赖的同协议前后日志
+- 禁止使用或尚待验证的历史数字
 
 ### 验收标准
 
@@ -778,6 +804,9 @@ Qwen3-8B + QLoRA
 - [ ] README 已明确实验协议
 - [ ] 简历数字没有使用存在泄漏的数据
 - [ ] 面试时可以用两张表解释“为什么微调”和“为什么 Multi-Agent”
+- [ ] fixture Benchmark 指标已明确限定为固定 30 题、冻结数据和统一运行配置
+- [ ] 没有同场景、同模型、同环境前后日志时，未写“2 分钟+ → 约 90 秒”
+- [ ] 未将弱标注数据表述为 10 万条人工标注
 
 ---
 
@@ -810,9 +839,9 @@ RelativeImprovement=
 必须同时记录绝对提升：
 
 ```text
-Macro-F1: 0.48 → 0.61
-绝对提升：+0.13
-相对提升：+27.1%
+Macro-F1: 0.XX → 0.XX
+绝对提升：+X.XX
+相对提升：+XX.X%
 ```
 
 ---
@@ -825,6 +854,8 @@ Macro-F1: 0.48 → 0.61
 | 5-Agent | XX% | XX% | XX% | XXs | XXs |
 
 注意：
+
+- 表中指标只适用于固定 30 题、冻结 fixtures 和统一运行配置，不代表线上全量或实时数据表现
 
 - 不预设 5-Agent 一定更优
 - 若 5-Agent 完整性更高但延迟更差，应如实呈现收益 / 成本权衡
@@ -945,7 +976,7 @@ Single-Agent 整体更优
 
 ## 7.1 正常停止
 
-正式表 1（Risk 必须完成，Sentiment 进度允许时完成）+ 表 2 已完成，README 和简历数字已整理。
+Day 1 已完成验收，Risk 三模型正式表和 Agent 表 2 已完成，`final_numbers.md`、README 和简历数字已整理。Sentiment 不作为停止条件。
 
 → **停止优化。**
 
@@ -983,6 +1014,10 @@ Single-Agent 整体更优
 
 实验部分必须明确：
 
+- 新闻数据是弱标注数据，除非有真实人工标注记录，否则不使用“人工标注约 10 万条”
+- fixture Benchmark 指标的固定样本与冻结数据适用范围
+- 历史时延提升仅在存在同场景、同模型、同环境前后日志时使用
+
 - 数据量
 - 训练样本量
 - eval_test 样本量
@@ -1000,7 +1035,7 @@ Single-Agent 整体更优
 
 仅当无完全重复样本泄漏、旧 Adapter 可追溯或已按新切分重训，且正式实验完成后使用：
 
-> 基于纳斯达克英文金融新闻构建风险/情感 1～5 级任务，采用时间切分与精确去重排除完全重复样本，并降低事件泄漏风险；对 Qwen3-8B 开展 QLoRA 微调，风险 Macro-F1 达 0.XX，较 Base Model 绝对提升 X.XX / 相对提升 XX%，MAE 降至 X.XX，并与 TF-IDF+LR 基线对比。
+> 清洗并构建纳斯达克英文金融新闻弱标注数据，形成风险/情感 1～5 级任务，采用时间切分与精确去重排除完全重复样本，并降低事件泄漏风险；对 Qwen3-8B 开展 QLoRA 微调，风险 Macro-F1 达 0.XX，较 Base Model 绝对提升 X.XX / 相对提升 XX%，MAE 降至 X.XX，并与 TF-IDF+LR 基线对比。
 
 如果风险 / 情感只有一个任务可信，只写一个，不强行同时写两个。
 
@@ -1026,6 +1061,7 @@ Single-Agent 整体更优
 - [ ] 从 Test 固定分层抽取 `eval_test`
 - [ ] 输出 `split_manifest.json`
 - [ ] 标签分层抽查约 100 条
+- [ ] 输出 `split_report.md` 与 `label_spotcheck.md` 并验收
 
 ## Day 2
 
@@ -1105,29 +1141,21 @@ Single-Agent 整体更优
 
 如果时间继续被压缩，严格遵守：
 
-\[
-\boxed{
-数据可信
->
-Base / QLoRA 对比
->
-Single / Multi-Agent 对比
->
-其他所有工作
-}
-\]
+> **Day 1 完成 → Risk 正式三模型对比 → Agent Benchmark → `final_numbers.md` / README / 简历 → Sentiment（有余力再做）**
 
 最低可接受结果是：
 
-1. 一个无直接泄漏、冻结的 `eval_test`
-2. 一组可信的 Base vs QLoRA 模型实验
-3. 一组固定 Benchmark 的 Single vs Multi-Agent 实验
-4. 两张真实结果表
-5. README 与简历数字
+1. Day 1 全部正式 CSV、manifest、report、spotcheck 生成并验收
+2. Risk 的 TF-IDF+LR / Qwen3-8B Base / QLoRA 同协议正式对比
+3. 30 条固定 Benchmark 的 Single-Agent / 5-Agent 系统级对比
+4. `final_numbers.md` 记录每个数字的来源与适用范围
+5. README 与简历使用可追溯的新数字
 
 ---
 
 # 12. 变更记录
+
+- 2026-08-26：将本版冻结为后续唯一执行基线；明确 Day 1 规则与完成状态；最低成功线收敛为 Day 1 + Risk 三模型 + Agent Benchmark + 成果整理；Sentiment 降为最后可选项；增加评分规则前置冻结、弱标注和 fixture 指标适用范围约束。
 
 - 2026-08-24：按可行性审查收紧执行基线：Risk 设为最低模型成功线，eval_test 默认 500；旧 Adapter 默认重训；Agent 固定 30 题并增加 5 题 smoke test、公平性预算、评分容差和系统级架构消融结论边界；Day 7 仅作失败重跑与收尾缓冲。
 

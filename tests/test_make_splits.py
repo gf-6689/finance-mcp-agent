@@ -198,4 +198,3 @@ def test_clean_raw_row_reports_invalid_date_and_label():
         "invalid_date",
         "invalid_label",
     )
-    

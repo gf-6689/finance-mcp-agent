@@ -3,6 +3,7 @@
 import hashlib
 import math
 import unicodedata
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 
 
@@ -77,3 +78,75 @@ def parse_utc_date(value: object) -> date | None:
         return None
 
     return timestamp.astimezone(timezone.utc).date()
+
+
+def _is_missing(value: object) -> bool:
+    """Return whether a source field is absent or blank."""
+    return value is None or (
+        isinstance(value, str) and not value.strip()
+    )
+
+
+def clean_raw_row(
+    raw_row: Mapping[str, object],
+    *,
+    label_column: str,
+    original_row_id: int,
+) -> tuple[dict[str, object] | None, tuple[str, ...]]:
+    """Convert one source row to the standard internal schema."""
+    required_fields = (
+        ("Article_title", "missing_title"),
+        ("Lsa_summary", "missing_summary"),
+        ("Stock_symbol", "missing_stock_symbol"),
+        ("Date", "missing_date"),
+        (label_column, "missing_label"),
+    )
+
+    reasons = tuple(
+        reason
+        for field, reason in required_fields
+        if _is_missing(raw_row.get(field))
+    )
+    if reasons:
+        return None, reasons
+
+    title = normalize_text(str(raw_row["Article_title"]))
+    summary = normalize_text(str(raw_row["Lsa_summary"]))
+    stock_symbol = normalize_stock_symbol(
+        str(raw_row["Stock_symbol"])
+    )
+
+    raw_url = raw_row.get("Url")
+    url = (
+        ""
+        if _is_missing(raw_url)
+        else normalize_url(str(raw_url))
+    )
+
+    parsed_date = parse_utc_date(raw_row["Date"])
+    label = parse_label(raw_row[label_column])
+
+    invalid_reasons = []
+    if parsed_date is None:
+        invalid_reasons.append("invalid_date")
+    if label is None:
+        invalid_reasons.append("invalid_label")
+
+    if invalid_reasons:
+        return None, tuple(invalid_reasons)
+
+    record = {
+        "sample_id": make_sample_id(
+            stock_symbol=stock_symbol,
+            title=title,
+            summary=summary,
+        ),
+        "date": parsed_date,
+        "title": title,
+        "summary": summary,
+        "stock_symbol": stock_symbol,
+        "url": url,
+        "label": label,
+        "_original_row_id": original_row_id,
+    }
+    return record, ()

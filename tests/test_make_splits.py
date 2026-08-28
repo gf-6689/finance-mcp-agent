@@ -1,5 +1,6 @@
 import csv
 import importlib
+import json
 from datetime import date
 
 import pytest
@@ -267,12 +268,86 @@ def test_load_and_clean_csv_aggregates_records_and_reason_counts(tmp_path):
     assert stats == {
         "raw_rows": 3,
         "rows_after_cleaning": 1,
-        "dropped_rows": 2,
+        "unique_removed_rows": 2,
+        "reason_hits": 2,
+        "overlap": 0,
         "reason_counts": {
             "missing_summary": 1,
             "invalid_label": 1,
         },
     }
+
+
+def test_load_and_clean_csv_distinguishes_reason_hits_from_removed_rows(
+    tmp_path,
+):
+    module = importlib.import_module("preprocess.make_splits")
+    source_path = tmp_path / "risk.csv"
+
+    fieldnames = [
+        "Date",
+        "Article_title",
+        "Lsa_summary",
+        "Stock_symbol",
+        "Url",
+        "risk_deepseek",
+    ]
+    rows = [
+        {
+            "Date": "2023-01-01 00:00:00 UTC",
+            "Article_title": "Valid title",
+            "Lsa_summary": "Valid summary",
+            "Stock_symbol": "AAPL",
+            "Url": "https://example.com/valid",
+            "risk_deepseek": "4.0",
+        },
+        {
+            "Date": "2023-01-02 00:00:00 UTC",
+            "Article_title": "Missing summary and label",
+            "Lsa_summary": "",
+            "Stock_symbol": "MSFT",
+            "Url": "https://example.com/missing",
+            "risk_deepseek": "",
+        },
+    ]
+
+    with source_path.open(
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    records, stats = module.load_and_clean_csv(
+        source_path,
+        label_column="risk_deepseek",
+    )
+
+    assert len(records) == 1
+    assert stats["unique_removed_rows"] == 1
+    assert stats["reason_hits"] == 2
+    assert stats["overlap"] == 1
+    assert stats["reason_counts"] == {
+        "missing_summary": 1,
+        "missing_label": 1,
+    }
+
+
+def test_count_physical_lines_counts_raw_line_breaks(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+
+    source_path = tmp_path / "lines.csv"
+    source_path.write_text(
+        "Date,Article_title,Article\n"
+        '2023-01-01 00:00:00 UTC,Title,"line one\nline two"\n',
+        encoding="utf-8",
+    )
+
+    # 3 physical text lines hold 2 logical CSV rows (header + data),
+    # because the quoted Article field embeds one newline.
+    assert module.count_physical_lines(source_path) == 3
 
 
 def test_load_and_clean_csv_rejects_missing_required_columns(tmp_path):
@@ -1345,3 +1420,441 @@ def test_split_records_by_time_orders_same_date_by_original_row_id():
         record["sample_id"]
         for record in containing_split
     ] == ["same-day-10", "same-day-20", "same-day-30"]
+
+
+def _make_labeled_records(
+    counts,
+    start_date=date(2023, 2, 1),
+):
+    """Build unique synthetic records with the given per-label counts."""
+    records = []
+    row_id = 0
+    for label in sorted(counts):
+        for index in range(counts[label]):
+            records.append(
+                {
+                    "sample_id": f"l{label}-{index:05d}",
+                    "date": start_date,
+                    "title": f"title {label} {index}",
+                    "summary": f"summary {label} {index}",
+                    "stock_symbol": "TEST",
+                    "url": f"https://example.com/{label}/{index}",
+                    "label": label,
+                    "_original_row_id": row_id,
+                }
+            )
+            row_id += 1
+    return records
+
+
+def test_compute_eval_quotas_allocates_minimum_then_capacity():
+    module = importlib.import_module("preprocess.make_splits")
+
+    quotas = module.compute_eval_quotas(
+        {1: 400, 2: 400, 3: 400, 4: 400, 5: 400},
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+    )
+
+    # base 10 per label, then 450 remaining seats over equal
+    # capacities: every label receives exactly 100.
+    assert quotas == {1: 100, 2: 100, 3: 100, 4: 100, 5: 100}
+    assert sum(quotas.values()) == 500
+
+
+def test_compute_eval_quotas_keeps_rare_label_entirely():
+    module = importlib.import_module("preprocess.make_splits")
+
+    quotas = module.compute_eval_quotas(
+        {1: 5, 2: 400, 3: 400},
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+    )
+
+    # label 1 has fewer than 10 rows: all 5 are kept, never copied,
+    # and the remaining seats go to labels 2 and 3 by capacity.
+    assert quotas[1] == 5
+    assert quotas == {1: 5, 2: 248, 3: 247}
+    assert sum(quotas.values()) == 500
+
+
+def test_compute_eval_quotas_breaks_remainder_ties_by_label_ascending():
+    module = importlib.import_module("preprocess.make_splits")
+
+    quotas = module.compute_eval_quotas(
+        {1: 100, 2: 100},
+        eval_size=111,
+        labels=(1, 2, 3, 4, 5),
+    )
+
+    # 91 remaining seats over equal capacities leave one seat with
+    # identical remainders: label 1 must win the tie.
+    assert quotas == {1: 56, 2: 55}
+
+    quotas_three_way = module.compute_eval_quotas(
+        {1: 100, 2: 100, 3: 100},
+        eval_size=290,
+        labels=(1, 2, 3, 4, 5),
+    )
+
+    # Two seats are left over with three identical remainders:
+    # labels 1 and 2 win, label 3 does not.
+    assert quotas_three_way == {1: 97, 2: 97, 3: 96}
+
+
+def test_compute_eval_quotas_never_exceeds_class_capacity():
+    module = importlib.import_module("preprocess.make_splits")
+
+    counts = {1: 200, 2: 200, 3: 200}
+    quotas = module.compute_eval_quotas(
+        counts,
+        eval_size=590,
+        labels=(1, 2, 3, 4, 5),
+    )
+
+    assert sum(quotas.values()) == 590
+    for label, count in counts.items():
+        assert quotas[label] <= count
+
+    # When eval_size equals the whole Test, quotas are the exact
+    # counts: nothing is copied and nothing is left out.
+    full_quotas = module.compute_eval_quotas(
+        {1: 12, 2: 30, 3: 8},
+        eval_size=50,
+        labels=(1, 2, 3, 4, 5),
+    )
+    assert full_quotas == {1: 12, 2: 30, 3: 8}
+
+
+def test_compute_eval_quotas_raises_when_test_smaller_than_eval_size():
+    module = importlib.import_module("preprocess.make_splits")
+
+    with pytest.raises(
+        ValueError,
+        match="fewer rows than eval_size",
+    ):
+        module.compute_eval_quotas(
+            {1: 100, 2: 200},
+            eval_size=500,
+            labels=(1, 2, 3, 4, 5),
+        )
+
+
+def test_sample_eval_records_returns_exactly_eval_size_subset():
+    module = importlib.import_module("preprocess.make_splits")
+
+    test_records = _make_labeled_records(
+        {1: 400, 2: 400, 3: 400, 4: 400, 5: 400}
+    )
+    eval_records, quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    assert len(eval_records) == 500
+
+    test_ids = {record["sample_id"] for record in test_records}
+    eval_ids = [record["sample_id"] for record in eval_records]
+
+    assert set(eval_ids) <= test_ids
+    assert len(eval_ids) == len(set(eval_ids))
+
+    for label, quota in quotas.items():
+        sampled = [
+            record
+            for record in eval_records
+            if record["label"] == label
+        ]
+        assert len(sampled) == quota
+
+
+def test_sample_eval_records_is_sorted_by_sample_id_ascending():
+    module = importlib.import_module("preprocess.make_splits")
+
+    eval_records, _quotas = module.sample_eval_records(
+        _make_labeled_records({1: 300, 2: 300}),
+        eval_size=400,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    sample_ids = [record["sample_id"] for record in eval_records]
+    assert sample_ids == sorted(sample_ids)
+
+
+def test_sample_eval_records_is_reproducible_with_fixed_seed():
+    module = importlib.import_module("preprocess.make_splits")
+
+    test_records = _make_labeled_records(
+        {1: 200, 2: 200, 3: 200, 4: 200, 5: 200}
+    )
+
+    first, first_quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+    second, second_quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    first_ids = [record["sample_id"] for record in first]
+    second_ids = [record["sample_id"] for record in second]
+
+    assert first_ids == second_ids
+    assert first_quotas == second_quotas
+
+
+def test_sample_eval_records_does_not_depend_on_input_order():
+    module = importlib.import_module("preprocess.make_splits")
+
+    test_records = _make_labeled_records(
+        {1: 200, 2: 200, 3: 200, 4: 200, 5: 200}
+    )
+    reversed_records = list(reversed(test_records))
+
+    first, _first_quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+    second, _second_quotas = module.sample_eval_records(
+        reversed_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    assert (
+        [record["sample_id"] for record in first]
+        == [record["sample_id"] for record in second]
+    )
+
+
+def test_sample_eval_records_raises_when_test_smaller_than_eval_size():
+    module = importlib.import_module("preprocess.make_splits")
+
+    with pytest.raises(
+        ValueError,
+        match="fewer rows than eval_size",
+    ):
+        module.sample_eval_records(
+            _make_labeled_records({1: 100, 2: 200}),
+            eval_size=500,
+            labels=(1, 2, 3, 4, 5),
+            seed=42,
+        )
+
+
+def test_write_split_csv_uses_frozen_fields_and_fixed_newlines(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+
+    records = _make_labeled_records(
+        {1: 2, 2: 1},
+        start_date=date(2023, 2, 1),
+    )
+    output_path = tmp_path / "eval_test.csv"
+
+    module.write_split_csv(output_path, records)
+
+    text = output_path.read_text(encoding="utf-8")
+
+    assert text.splitlines()[0] == (
+        "sample_id,date,title,summary,stock_symbol,url,label"
+    )
+    assert "_original_row_id" not in text
+    assert "\r\n" not in text
+
+    with output_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 3
+    assert [row["sample_id"] for row in rows] == [
+        "l1-00000",
+        "l1-00001",
+        "l2-00000",
+    ]
+    assert rows[0]["date"] == "2023-02-01"
+    assert rows[0]["label"] == "1"
+
+
+def test_eval_test_csv_sha256_is_reproducible(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+
+    test_records = _make_labeled_records(
+        {1: 200, 2: 200, 3: 200, 4: 200, 5: 200}
+    )
+
+    first_records, _first_quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+    second_records, _second_quotas = module.sample_eval_records(
+        test_records,
+        eval_size=500,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    first_path = tmp_path / "first" / "eval_test.csv"
+    second_path = tmp_path / "second" / "eval_test.csv"
+    first_path.parent.mkdir()
+    second_path.parent.mkdir()
+
+    module.write_split_csv(first_path, first_records)
+    module.write_split_csv(second_path, second_records)
+
+    assert module.sha256_file(first_path) == module.sha256_file(
+        second_path
+    )
+
+
+def test_check_split_integrity_reports_zero_overlaps():
+    module = importlib.import_module("preprocess.make_splits")
+
+    splits = {
+        "train": _make_labeled_records({1: 20}),
+        "val": _make_labeled_records({2: 20}),
+        "test": _make_labeled_records({3: 20}),
+    }
+    eval_records, _quotas = module.sample_eval_records(
+        splits["test"],
+        eval_size=10,
+        labels=(1, 2, 3, 4, 5),
+        seed=42,
+    )
+
+    integrity = module.check_split_integrity(splits, eval_records)
+
+    assert integrity == {
+        "train_duplicate_sample_ids": 0,
+        "val_duplicate_sample_ids": 0,
+        "test_duplicate_sample_ids": 0,
+        "eval_test_duplicate_sample_ids": 0,
+        "train_intersect_val": 0,
+        "train_intersect_test": 0,
+        "val_intersect_test": 0,
+        "eval_test_outside_test": 0,
+    }
+
+
+def test_main_cli_writes_frozen_artifacts(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+
+    source_path = tmp_path / "source.csv"
+    fieldnames = [
+        "Date",
+        "Article_title",
+        "Lsa_summary",
+        "Stock_symbol",
+        "Url",
+        "risk_deepseek",
+    ]
+    with source_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for index in range(3000):
+            writer.writerow(
+                {
+                    "Date": (
+                        f"2024-01-{(index // 500) + 1:02d} "
+                        "04:00:00 UTC"
+                    ),
+                    "Article_title": f"title {index}",
+                    "Lsa_summary": f"summary {index}",
+                    "Stock_symbol": "AAPL",
+                    "Url": f"https://example.com/{index}",
+                    "risk_deepseek": str((index % 5) + 1),
+                }
+            )
+
+    output_dir = tmp_path / "splits"
+
+    exit_code = module.main(
+        [
+            "--task",
+            "risk",
+            "--source",
+            str(source_path),
+            "--output-dir",
+            str(output_dir),
+            "--eval-size",
+            "500",
+            "--seed",
+            "42",
+        ]
+    )
+
+    assert exit_code == 0
+    for name in ("train", "val", "test", "eval_test"):
+        assert (output_dir / f"{name}.csv").exists()
+    assert (output_dir / "split_manifest.json").exists()
+    assert (output_dir / "split_report.md").exists()
+
+    with (output_dir / "eval_test.csv").open(
+        "r", encoding="utf-8", newline=""
+    ) as handle:
+        eval_records = list(csv.DictReader(handle))
+    assert len(eval_records) == 500
+
+    manifest = json.loads(
+        (output_dir / "split_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["task"] == "risk"
+    assert manifest["source"]["logical_csv_rows"] == 3000
+    assert (
+        manifest["source"]["physical_text_lines_including_header"]
+        == 3001
+    )
+    assert manifest["eval_rule"]["eval_size"] == 500
+    assert manifest["splits"]["train"]["rows"] == 2000
+    assert manifest["splits"]["val"]["rows"] == 500
+    assert manifest["splits"]["test"]["rows"] == 500
+    assert manifest["splits"]["eval_test"]["rows"] == 500
+    assert (
+        manifest["splits"]["eval_test"]["label_distribution"]
+        == {"1": 100, "2": 100, "3": 100, "4": 100, "5": 100}
+    )
+
+
+def test_compare_with_previous_run_detects_identical_outputs(tmp_path):
+    module = importlib.import_module("preprocess.make_splits")
+
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+
+    records = _make_labeled_records({1: 30, 2: 30})
+    for directory in (first_dir, second_dir):
+        module.write_split_csv(
+            directory / "train.csv", records
+        )
+        module.write_split_csv(
+            directory / "val.csv", records
+        )
+        module.write_split_csv(
+            directory / "test.csv", records
+        )
+        module.write_split_csv(
+            directory / "eval_test.csv", records
+        )
+
+    results = module.compare_with_previous_run(
+        second_dir, first_dir
+    )
+
+    for name in ("train", "val", "test", "eval_test"):
+        assert results[name]["csv_sha256_equal"] is True
+        assert results[name]["ordered_sample_ids_equal"] is True

@@ -1,0 +1,106 @@
+{
+  "task": "risk",
+  "protocol_version": "1.0.0",
+  "source": {
+    "path": "risk_nasdaq/risk_deepseek_cleaned_nasdaq_news_full.csv",
+    "sha256": "33251916177feceebec6f2bec58e81cfbf10fb9115178504cb044498c20c7e73",
+    "logical_csv_rows": 127176,
+    "physical_text_lines_including_header": 2092987
+  },
+  "split_rule": {
+    "type": "time_boundary",
+    "target_ratio": {
+      "train": 0.7,
+      "val": 0.15,
+      "test": 0.15
+    },
+    "cutoffs": {
+      "train_end": "2022-02-25",
+      "val_end": "2023-02-03"
+    }
+  },
+  "eval_rule": {
+    "eval_size": 500,
+    "seed": 42,
+    "labels": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "class_minimum": 10,
+    "allocation": "minimum_then_remaining_capacity_largest_remainder",
+    "tie_break": "label_ascending"
+  },
+  "splits": {
+    "train": {
+      "name": "train",
+      "rows": 50588,
+      "start_date": "2009-07-07",
+      "end_date": "2022-02-25",
+      "label_distribution": {
+        "1": 291,
+        "2": 6672,
+        "3": 39095,
+        "4": 4494,
+        "5": 36
+      },
+      "csv_sha256": "bf4319df99d4a2c83e370d010eb7499d24544d8679adf8a20690e523732b91d4",
+      "sample_ids_sha256": "f4b6e89e63e808868023cd06eefdb29b29230d24c808465c8e7e73f6d68110c0"
+    },
+    "val": {
+      "name": "val",
+      "rows": 10857,
+      "start_date": "2022-02-26",
+      "end_date": "2023-02-03",
+      "label_distribution": {
+        "1": 67,
+        "2": 1783,
+        "3": 7725,
+        "4": 1270,
+        "5": 12
+      },
+      "csv_sha256": "4c495a51e01b7e4e6600d9a69c1d333cd5ab01311c7b2997d29f36cc484874a1",
+      "sample_ids_sha256": "49a8133565a5f5a6f047f00ab79e0f59274dbb17fc14b01f7726a64658a3ca00"
+    },
+    "test": {
+      "name": "test",
+      "rows": 10830,
+      "start_date": "2023-02-04",
+      "end_date": "2024-01-09",
+      "label_distribution": {
+        "1": 70,
+        "2": 2221,
+        "3": 7602,
+        "4": 931,
+        "5": 6
+      },
+      "csv_sha256": "f50c062afccd841ec296717ddd9b651f77fb34e6845b9f247ddece798887798d",
+      "sample_ids_sha256": "5f1619c63531fe6a42f7ad13566e101e538f2a9f692527e49900c57e19fa8bf9"
+    },
+    "eval_test": {
+      "name": "eval_test",
+      "rows": 500,
+      "start_date": "2023-02-04",
+      "end_date": "2023-12-16",
+      "label_distribution": {
+        "1": 12,
+        "2": 103,
+        "3": 330,
+        "4": 49,
+        "5": 6
+      },
+      "csv_sha256": "b052920047da97cc3e7e7ab4df382e79ebc9ab49e4fd466e7364807972272986",
+      "sample_ids_sha256": "8e90f19b917c9ae1499dfca28c39fff4793768e9c2510ef0912f9757f5f0c177"
+    }
+  },
+  "code": {
+    "path": "preprocess/make_splits.py",
+    "sha256": "f5a9d063e4c8525a201c80fd2c2dab979630d86b8ad4db0890f0e997a9895e74"
+  },
+  "git": {
+    "commit": "243d43ed597a1ab1921d79aa121fede810893301",
+    "working_tree_dirty": true
+  }
+}

@@ -38,3 +38,6 @@ Financial-MCP-Agent/reports/
 
 # Isolated development worktrees
 /.worktrees/
+
+# Frozen split CSVs (regenerated deterministically; manifest + report tracked)
+data/splits/risk/*.csv

@@ -41,3 +41,6 @@ Financial-MCP-Agent/reports/
 
 # Frozen split CSVs (regenerated deterministically; manifest + report tracked)
 data/splits/risk/*.csv
+results/tfidf_lr_repro_check/
+results/qwen/base_repro_check/
+tmp/

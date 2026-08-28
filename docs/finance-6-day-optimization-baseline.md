@@ -1,7 +1,7 @@
 # A 股金融项目 6 天优化执行基线（简历证据链版 v2）
 
 > 建立日期：2026-08-24  
-> 修订日期：2026-08-26
+> 修订日期：2026-08-28
 > 状态：**唯一执行基线（后续所有优化工作以本文档为准）**  
 > 定位：目标是把项目补到“秋招简历可写、面试可解释”的程度，**不是**论文级评测。  
 > 默认版本：6 天。第 7 天仅作为 QLoRA 重训、失败重跑与收尾缓冲，**不扩大实验范围**。
@@ -47,6 +47,22 @@
 - 大范围 QLoRA 超参数搜索
 - 金融数据版本管理系统（用 fixtures JSON + manifest 替代）
 - 新增模型、新增 Agent、新增工具、新增技术模块
+
+### 1.3 已有简历数字的处理原则
+
+| 简历候选数字或表述 | 本轮处理 |
+|---|---|
+| Risk / Sentiment Accuracy `91% / 88%` | 暂停使用；旧随机切分结果不作为正式简历数字，等待同协议重新验证 |
+| 工具调用成功率 `98%` | 有逐调用日志和明确分母则复核；否则以新 Benchmark 结果替换，并注明固定 30 题与 fixture 范围 |
+| 数据一致率约 `99%` | 有 ground truth / fixture 证据则复核；否则以新 Benchmark 的事实一致率替换 |
+| `2 分钟+ → 约 90 秒`、效率提升约 `1.25 倍` | 仅在存在同场景、同模型、同环境的前后原始日志时保留；否则只报告新 Benchmark 的 P50/P95 |
+| 覆盖 A 股 `5000+` 股票 | 仅作为经数据源或工具股票列表验证后的能力范围，不与 30 题 Benchmark 指标混写 |
+| 用户满意度接近 `90%` | 仅在确有真实灰度记录时使用；本仓库不补造 |
+| `500+` 高频问题知识库 | 仅在确有数据文件或业务记录时使用；本轮不新增 |
+| SFT + GRPO、奖励提升 `3–5%` | 当前个人仓库不作为证据；无独立真实记录时不写 |
+| “整理并标注约 10 万条” | 改为“清洗并构建约 10 万条金融新闻弱标注数据”；只有存在真实人工标注流程与记录时才写“人工标注” |
+
+所有百分比最终以可追溯的新数字替换，不以复现旧简历数字为优化目标。
 
 ---
 
@@ -115,26 +131,85 @@
 
 训练、Prompt、人工抽查、评测必须使用同一含义。
 
-#### 2. 写 `preprocess/make_splits.py`
+#### 2. 写 `preprocess/make_splits.py` 并冻结数据协议
 
-对风险、情感数据分别执行：
+##### 2.1 标准字段契约
 
-- 删除缺失或非法标签
-- 标签统一转换为整数 1～5
-- 日期字段解析与异常记录
-- 生成标准化文本字段
-- 按 URL 完全重复去重（有 URL 时）
-- 按标准化标题完全重复去重
-- 按标准化 `title + summary` 完全重复去重
-- 生成稳定 `sample_id`
-
-推荐：
+源字段映射固定为：
 
 ```text
-sample_id = sha256(normalized_title + normalized_summary)
+title   = Article_title
+summary = Lsa_summary
+symbol  = Stock_symbol
+url     = Url
+date    = Date
 ```
 
-若股票代码是任务输入的一部分，也可以加入 `stock_symbol`。
+正式输出字段固定为：
+
+```text
+sample_id,date,title,summary,stock_symbol,url,label
+```
+
+规则：
+
+- `Article_title`、`Lsa_summary`、`Stock_symbol`、`Date` 缺失或清洗后为空时删除
+- `Url` 可缺失，不因 URL 缺失删除
+- 不使用 `Article` 正文、其他摘要列或其他摘要算法回退
+- Risk / Sentiment 标签只接受可无损转换为整数的 1～5
+- Sentiment 的缺失标签和非法 `0.0` 删除
+- `Publisher`、`Author`、`Article` 和其他摘要列不进入正式 split
+
+##### 2.2 标准化
+
+- 文本：NFKC → `casefold()` → 连续空白压成单空格 → `strip()`
+- `stock_symbol`：NFKC → `strip()` → `upper()`
+- URL：NFKC → `strip()`
+- URL 不修改 path 大小写和 query 参数
+
+##### 2.3 精确去重与冲突标签
+
+去重粒度固定为 `stock_symbol` 任务粒度，阶段顺序固定为：
+
+```text
+URL → title+summary → title
+```
+
+每个阶段均执行：
+
+```text
+groupby(stock_symbol + key)
+→ 检查 label
+→ 标签一致：保留日期最早记录
+→ 标签冲突：整组删除
+```
+
+补充规则：
+
+- 空 URL 跳过 URL 阶段，但继续进入后续去重阶段
+- 排序固定为 `date ASC → original_row_id ASC`
+- 使用稳定排序
+
+##### 2.4 `sample_id`
+
+定义固定为：
+
+```text
+sha256(
+    normalized_stock_symbol + "\n" +
+    normalized_title + "\n" +
+    normalized_summary
+)
+```
+
+写出前必须断言：
+
+- `sample_id` 无缺失
+- 每个任务文件内 `sample_id` 唯一
+
+报告不得声称“全局事件级无泄漏”，只能表述为：
+
+> 在股票任务粒度进行精确去重，并通过时间切分降低事件泄漏风险。
 
 #### 3. 按日期边界切分，而不是按行号硬切
 
@@ -160,14 +235,18 @@ Test:  date > cutoff_2
 
 #### 4. 从 Test 固定抽取 `eval_test.csv`
 
-为了控制 Qwen3-8B 推理耗时：
+每个任务的正式规模固定为 **500 条**，冻结后不再扩容或缩减。规则：
 
-- Risk：P0，默认 500 条
-- Sentiment：进度允许时完成，默认 500 条
-- 先实测吞吐；时间充足时可在正式冻结前统一扩至每任务 1000 条
-- 按 Test 自然标签比例分层抽样，并为少数类设置可实现的最低样本数
-- 某类别不足最低数时保留该类全部样本，不得过采样或复制样本
+- 标签集合固定为 `[1,2,3,4,5]`
+- 每个 Test 中存在类别的最低目标为 10 条
+- 类别不足 10 条时全部保留
+- Risk label 5 当前 Test 仅 6 条，因此 6 条全部进入
+- 不复制、不放回
+- 先按 Test 自然标签比例计算 ideal quota
+- 使用动态差值分配或扣减，每调整 1 个名额后重新计算
+- 若 `test_total < 500` 立即报错
 - 固定 `random_state=42`
+- 各类别完成抽样后合并，并按 `sample_id` 升序写出
 - 一次冻结后不得根据模型结果重新抽样
 
 `split_report.md` 必须同时记录 Test 与 `eval_test` 的标签分布及抽样规则。Macro-F1 固定按标签集合 `[1,2,3,4,5]` 计算，缺失类别 F1 记 0，`zero_division=0`。
@@ -176,28 +255,35 @@ Test:  date > cutoff_2
 
 #### 5. 生成冻结清单
 
-输出：
+`split_manifest.json` 结构固定采用：
 
 ```text
-split_manifest.json
+顶层 protocol
++ generator
++ tasks.risk
++ tasks.sentiment
 ```
 
-至少包含：
+`generator` 至少包含：
 
 ```json
 {
-  "train_samples": 0,
-  "val_samples": 0,
-  "test_samples": 0,
-  "eval_test_samples": 0,
-  "train_date_range": ["", ""],
-  "val_date_range": ["", ""],
-  "test_date_range": ["", ""],
-  "test_sha256": "",
-  "eval_test_sha256": "",
-  "split_version": "v1"
+  "script": "preprocess/make_splits.py",
+  "script_sha256": "",
+  "git_commit": ""
 }
 ```
+
+要求：
+
+- `script_sha256` 必填
+- `source_sha256` 必填
+- Risk / Sentiment 各自记录清洗、删除、冲突和标签分布统计
+- 每个 train / val / test / eval_test 同时记录 CSV SHA256 和 `sample_ids_sha256`
+- `sample_ids_sha256` 对排序后的唯一 `sample_id` 集合计算
+- 每个 split 同时记录样本数和日期范围
+- `split_report.md` 记录执行时 Git working tree 是否 dirty
+- 不记录 manifest 自身哈希
 
 大型 CSV 可 `.gitignore`，Git 提交：
 
@@ -307,9 +393,7 @@ Validation 只比较：
 C ∈ {0.5, 1, 2}
 ```
 
-选择最优 C 后冻结。
-
-Risk 必须训练；Sentiment 仅在进度允许时训练。
+选择最优 C 后冻结。Risk 必须完成；Sentiment LR 成本较低，可以生成，但不得阻塞 Risk 三模型对比和 Agent Benchmark。Sentiment Base / QLoRA 只在其他 P0 全部完成后执行。
 
 #### 4. 正式比较时使用相同 `eval_test.csv`
 
@@ -330,7 +414,7 @@ LR 虽然可以轻松跑完整 Test，但**表 1 中三种模型必须使用相�
 ### 验收标准
 
 - [ ] Risk 的 Macro-F1、MAE、Accuracy 已生成
-- [ ] Sentiment 在进度允许时生成；未完成则在表 1 标为未运行
+- [ ] Sentiment LR 可选；Sentiment Base / QLoRA 仅在其他 P0 全部完成后执行，未完成则在表 1 标为未运行
 - [ ] 三模型共用同一指标代码
 - [ ] 表 1 中 LR 使用固定 `eval_test`
 
@@ -1062,6 +1146,8 @@ Day 1 已完成验收，Risk 三模型正式表和 Agent 表 2 已完成，`fina
 - [ ] 输出 `split_manifest.json`
 - [ ] 标签分层抽查约 100 条
 - [ ] 输出 `split_report.md` 与 `label_spotcheck.md` 并验收
+- [ ] manifest 的 source/script/CSV/sample_ids 哈希完整
+- [ ] 两个 `eval_test` 均固定为 500 条
 
 ## Day 2
 
@@ -1090,6 +1176,8 @@ Day 1 已完成验收，Risk 三模型正式表和 Agent 表 2 已完成，`fina
 - [ ] 股票跨多个行业
 - [ ] 冻结全部 Benchmark 所需外部数据
 - [ ] Tool 接口保持不变，只替换 Fixture Backend
+- [ ] 评分规则和事实容差已在正式运行前冻结
+- [ ] 正式输出后未修改题目、样本、评分规则或事实容差
 
 ## Day 5
 
@@ -1154,6 +1242,8 @@ Day 1 已完成验收，Risk 三模型正式表和 Agent 表 2 已完成，`fina
 ---
 
 # 12. 变更记录
+
+- 2026-08-28：补齐 Day 1 标准字段、标准化、股票任务粒度去重、冲突标签、固定 sample_id、500 条 eval_test 和 manifest 哈希协议；增加历史简历数字处理表，并统一 Sentiment 与 Agent 评分冻结优先级。
 
 - 2026-08-26：将本版冻结为后续唯一执行基线；明确 Day 1 规则与完成状态；最低成功线收敛为 Day 1 + Risk 三模型 + Agent Benchmark + 成果整理；Sentiment 降为最后可选项；增加评分规则前置冻结、弱标注和 fixture 指标适用范围约束。
 

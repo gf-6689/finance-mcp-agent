@@ -1,0 +1,20 @@
+{
+  "task": "risk",
+  "model": "tfidf_logistic_regression",
+  "val_search": [
+    {
+      "C": 0.5,
+      "val_macro_f1": 0.3625087643298358
+    },
+    {
+      "C": 1.0,
+      "val_macro_f1": 0.37096356771739564
+    },
+    {
+      "C": 2.0,
+      "val_macro_f1": 0.3806320398671881
+    }
+  ],
+  "selected_C": 2.0,
+  "selection_rule": "choose C with the highest Val Macro-F1; ties are broken by the smallest C"
+}

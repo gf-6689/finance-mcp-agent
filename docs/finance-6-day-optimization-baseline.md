@@ -1,9 +1,10 @@
 # A 股金融项目 3 天最小优化计划（秋招简历版）
 
-> 修订日期：2026-08-28  
+> 修订日期：2026-08-29
 > 定位：只完成能够直接增强秋招简历与面试证据的必要工作，不再扩展技术栈。  
 > 核心目标：形成“Risk 模型效果 → 接入 News Agent → 端到端验证”的完整证据链。  
 > Sentiment、Single-Agent vs Multi-Agent 消融、30 条 Benchmark、复杂 LLM-as-Judge 均不再执行。
+> 当前状态：**任务 1（Risk 模型实验）已完成并通过验证；任务 2、3 尚未执行。**
 
 ---
 
@@ -13,7 +14,7 @@
 
 如果时间非常紧，只完成 **Risk 模型实验**，已经能够得到当前项目最缺少、也是最有价值的一条量化证据：
 
-> **Qwen3-8B + QLoRA 在固定 500 条测试集上的 Macro-F1 为 XX.X%，较 Base Model 提升 X.X pct。**
+> **Qwen3-8B + QLoRA 在固定 500 条测试集上的 Macro-F1 为 51.32%，较 Base Model 提升 24.06 个百分点。**
 
 这已经足以支撑简历中的“金融新闻风险建模”部分。
 
@@ -60,7 +61,35 @@ Summary Agent
 
 最重要的简历数字：
 
-> **QLoRA 较 Base Model Macro-F1 提升 X.X pct。**
+> **QLoRA 较 Base Model Macro-F1 提升 24.06 个百分点。**
+
+### 当前完成结果（2026-08-29）
+
+任务 1 已完成，三种模型均使用同一份固定 500 条 Risk `eval_test.csv`。正式结果如下：
+
+| Model | Macro-F1 | Accuracy | Mean Latency |
+|---|---:|---:|---:|
+| TF-IDF + LR | 0.340475 | 58.4% | 0.197733 ms |
+| Qwen3-8B Base | 0.272622 | 33.8% | 133.973080 ms |
+| Qwen3-8B + QLoRA | **0.513218** | **73.0%** | 220.646619 ms |
+
+核心结论：
+
+```text
+QLoRA Macro-F1 - Base Macro-F1
+= 0.5132181966 - 0.2726223599
+= 0.2405958367
+= 24.06 个百分点
+```
+
+结果证据保存在：
+
+- `results/tfidf_lr/`
+- `results/qwen/base/`
+- `results/qwen/qlora/`
+- `results/model_comparison.md`
+
+局限：冻结的 500 条 `eval_test` 中 label 5 仅有 6 条，且 QLoRA 对 label 5 的预测数为 0。因此不能声称五个风险等级都获得了稳定改善。
 
 ---
 
@@ -157,6 +186,24 @@ Risk 接入 News Agent
 
 > 直接复用，不重新设计数据协议。
 
+
+### 正式数据冻结结果（已完成）
+
+```text
+原始 CSV 逻辑记录：127,176
+清洗后：77,748
+精确去重后：72,275
+Train：50,588（2009-07-07 ～ 2022-02-25）
+Val：10,857（2022-02-26 ～ 2023-02-03）
+Test：10,830（2023-02-04 ～ 2024-01-09）
+eval_test：500（seed=42）
+```
+
+`eval_test` 标签分布：`{1:12, 2:103, 3:330, 4:49, 5:6}`。
+Train、Val、Test 无 `sample_id` 交集，`eval_test` 全部来自 Test；
+两次完整生成的 CSV SHA256 和有序 sample-id 均一致。
+
+
 ---
 
 ## Step 2：固定 500 条 Risk 测试集
@@ -232,6 +279,8 @@ C ∈ {0.5, 1, 2}
 
 选出 Val Macro-F1 最好的配置后冻结。
 
+正式执行结果：`C=2.0` 的 Val Macro-F1 最高（0.380632），因此冻结 `C=2.0`。
+
 然后在固定 500 条 `eval_test.csv` 上得到：
 
 - Macro-F1
@@ -260,6 +309,12 @@ LR
 vs
 Qwen3-8B Base
 ```
+
+正式结果：
+
+- TF-IDF + LR：Macro-F1 0.340475，Accuracy 58.4%，Mean Latency 0.197733 ms；
+- Qwen3-8B Base：Macro-F1 0.272622，Accuracy 33.8%，Mean Latency 133.973080 ms；
+- Base valid output rate：99.8%（1 条 invalid 保留在 500 条分母中）。
 
 ---
 
@@ -305,6 +360,19 @@ Qwen3-8B
 
 不做大范围超参数搜索。
 
+正式训练采用冻结 Train20k（seed=42，label 5 的 36 条全部保留），
+训练 3 epochs；每个 epoch 保存 Adapter，并在冻结 Val1000 上进行生成式
+Macro-F1 评测。三个 checkpoint 的 Val Macro-F1 分别为：
+
+| Epoch | Global Step | Val Macro-F1 | Accuracy |
+|---:|---:|---:|---:|
+| 1 | 1250 | 0.467437 | 0.735 |
+| 2 | 2500 | **0.502214** | **0.754** |
+| 3 | 3750 | 0.501635 | 0.748 |
+
+因此冻结 epoch 2 / global step 2500 的 Adapter。Test 和 `eval_test`
+均未参与训练或 checkpoint 选择。
+
 ---
 
 ## Step 3：正式评测 QLoRA
@@ -333,9 +401,9 @@ Metrics
 
 | Model | Macro-F1 | Accuracy | Mean Latency |
 |---|---:|---:|---:|
-| TF-IDF + LR | XX | XX | XX |
-| Qwen3-8B Base | XX | XX | XX |
-| Qwen3-8B + QLoRA | **XX** | **XX** | XX |
+| TF-IDF + LR | 0.340475 | 0.584000 | 0.197733 ms |
+| Qwen3-8B Base | 0.272622 | 0.338000 | 133.973080 ms |
+| Qwen3-8B + QLoRA | **0.513218** | **0.730000** | 220.646619 ms |
 
 计算：
 
@@ -347,7 +415,7 @@ F1_QLoRA - F1_Base
 
 简历优先使用：
 
-> **Macro-F1：XX.X% → XX.X%，QLoRA 较 Base 提升 X.X pct。**
+> **Macro-F1：27.26% → 51.32%，QLoRA 较 Base 提升 24.06 个百分点。**
 
 这里优先报告 **百分点（pct）绝对提升**，不必再写复杂的相对百分比提升。
 
@@ -581,7 +649,7 @@ Mean Latency
 
 最重要数字：
 
-> **QLoRA 较 Base Macro-F1 提升 X.X pct。**
+> **QLoRA 较 Base Macro-F1 提升 24.06 个百分点。**
 
 ---
 
@@ -649,12 +717,12 @@ Summary Agent
 
 满足以下条件立即停止 Finance 优化：
 
-- [ ] Risk 固定 500 条 eval_test
-- [ ] TF-IDF + LR 完成
-- [ ] Qwen3-8B Base 完成
-- [ ] Risk QLoRA 完成
-- [ ] Macro-F1 / Accuracy / Mean Latency 完成
-- [ ] 得到“QLoRA 较 Base Macro-F1 提升 X.X pct”
+- [x] Risk 固定 500 条 eval_test
+- [x] TF-IDF + LR 完成
+- [x] Qwen3-8B Base 完成
+- [x] Risk QLoRA 完成
+- [x] Macro-F1 / Accuracy / Mean Latency 完成
+- [x] 得到“QLoRA 较 Base Macro-F1 提升 24.06 个百分点”
 - [ ] Risk Predictor 接入 News Agent
 - [ ] Risk 结果进入 Summary Agent
 - [ ] 完成 5～10 个端到端案例
@@ -691,6 +759,6 @@ Macro-F1 / Accuracy / Latency
 
 此时简历重点写：
 
-> 基于金融新闻构建 1～5 级风险分类任务，对 Qwen3-8B 开展 4-bit QLoRA 微调；在固定 500 条测试集上 Macro-F1 达 XX.X%，较 Base Model 提升 X.X pct，并与 TF-IDF+LR 基线进行对比。
+> 基于 127,176 条金融新闻记录构建 1～5 级风险分类任务，对 Qwen3-8B 开展 4-bit QLoRA 微调；在固定 500 条测试集上 Macro-F1 达 51.32%，较 Base Model 提升 24.06 个百分点，并超过 TF-IDF+LR 基线。
 
 不再强调 Agent 的量化提升，只把现有 Multi-Agent 系统作为项目工程实现进行描述。

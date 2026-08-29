@@ -1,0 +1,26 @@
+{
+  "purpose": "Val subset for QLoRA checkpoint selection (frozen); never used for training",
+  "source": {
+    "path": "data/splits/risk/val.csv",
+    "csv_sha256": "4c495a51e01b7e4e6600d9a69c1d333cd5ab01311c7b2997d29f36cc484874a1"
+  },
+  "subset_size": 1000,
+  "seed": 42,
+  "sampling_method": "same deterministic stratified allocation as eval_test quotas: class minimum 10 then remaining-capacity largest remainder, ascending-label tie-break",
+  "quotas": {
+    "1": 15,
+    "2": 166,
+    "3": 688,
+    "4": 121,
+    "5": 10
+  },
+  "label_distribution": {
+    "1": 15,
+    "2": 166,
+    "3": 688,
+    "4": 121,
+    "5": 10
+  },
+  "sample_ids_file": "data/training/risk_qlora_val_checkpoint_selection_sample_ids.txt",
+  "sample_ids_sha256": "98d857146c51e522db1eb3ce789d116d46e270753d6ff373523f5853ed9ffe9e"
+}

@@ -1,0 +1,29 @@
+{
+  "purpose": "formal QLoRA training set (frozen)",
+  "source": {
+    "path": "data/splits/risk/train.csv",
+    "csv_sha256": "bf4319df99d4a2c83e370d010eb7499d24544d8679adf8a20690e523732b91d4"
+  },
+  "formal_train_size": 20000,
+  "seed": 42,
+  "sampling_method": "without replacement; label 5 kept in full; remaining seats proportional to original Train label counts with largest remainder and ascending-label tie-break",
+  "always_keep_labels": [
+    5
+  ],
+  "quotas": {
+    "1": 115,
+    "2": 2635,
+    "3": 15439,
+    "4": 1775,
+    "5": 36
+  },
+  "label_distribution": {
+    "1": 115,
+    "2": 2635,
+    "3": 15439,
+    "4": 1775,
+    "5": 36
+  },
+  "sample_ids_file": "data/training/risk_qlora_train_sample_ids.txt",
+  "sample_ids_sha256": "e975eb686e33b7614076e8e233321592224df25e4686a51cf3650baa3b538a0b"
+}

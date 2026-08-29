@@ -44,3 +44,7 @@ data/splits/risk/*.csv
 results/tfidf_lr_repro_check/
 results/qwen/base_repro_check/
 tmp/
+
+# Formal QLoRA training artifacts (Checkpoint 4B; never committed)
+artifacts/
+results/qwen/qlora_repro_check/

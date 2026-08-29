@@ -1,0 +1,111 @@
+{
+  "protocol_version": "1.0.0",
+  "frozen_at_checkpoint": "4B",
+  "started_at_utc": "2026-08-29T02:48:59Z",
+  "finished_at_utc": "2026-08-29T08:30:50Z",
+  "output_dir": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1",
+  "base_model": "/root/autodl-tmp/Finance/Qwen",
+  "train_size": 20000,
+  "epochs": 3,
+  "effective_batch_size": 16,
+  "max_seq_length": 1024,
+  "seed": 42,
+  "data_seed": 42,
+  "data_verification": {
+    "train_rows": 20000,
+    "train_sample_ids_sha256": "e975eb686e33b7614076e8e233321592224df25e4686a51cf3650baa3b538a0b",
+    "train_csv_sha256": "bf4319df99d4a2c83e370d010eb7499d24544d8679adf8a20690e523732b91d4",
+    "train_label_distribution": {
+      "1": 115,
+      "2": 2635,
+      "3": 15439,
+      "4": 1775,
+      "5": 36
+    },
+    "val_rows": 1000,
+    "val_sample_ids_sha256": "98d857146c51e522db1eb3ce789d116d46e270753d6ff373523f5853ed9ffe9e",
+    "val_csv_sha256": "4c495a51e01b7e4e6600d9a69c1d333cd5ab01311c7b2997d29f36cc484874a1",
+    "val_label_distribution": {
+      "1": 15,
+      "2": 166,
+      "3": 688,
+      "4": 121,
+      "5": 10
+    },
+    "overlap": 0,
+    "test_accessed_for_sample_content": false,
+    "eval_test_accessed_for_sample_content": false
+  },
+  "token_length_stats": {
+    "min": 173,
+    "p50": 282,
+    "p90": 345,
+    "p99": 446,
+    "max": 1024,
+    "mean": 291.39285,
+    "truncated": 69
+  },
+  "per_epoch": [
+    {
+      "epoch": 1,
+      "global_step": 1250,
+      "mean_train_loss": 0.11333,
+      "learning_rate": 1.3753093208688482e-05,
+      "elapsed_seconds": 6765.175009068102,
+      "examples_per_second": 2.9563167210296584,
+      "nan_or_inf": false
+    },
+    {
+      "epoch": 2,
+      "global_step": 2500,
+      "mean_train_loss": 0.08425200000000001,
+      "learning_rate": 6.8792961231784435e-06,
+      "elapsed_seconds": 6937.541267987341,
+      "examples_per_second": 2.8828657340444517,
+      "nan_or_inf": false
+    },
+    {
+      "epoch": 3,
+      "global_step": 3750,
+      "mean_train_loss": 0.073104,
+      "learning_rate": 5.499037668408029e-09,
+      "elapsed_seconds": 6774.835554219782,
+      "examples_per_second": 2.952101174993506,
+      "nan_or_inf": false
+    }
+  ],
+  "checkpoints": [
+    {
+      "path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-1250",
+      "name": "checkpoint-1250",
+      "global_step": 1250,
+      "epoch": 1.0,
+      "adapter_files_present": true
+    },
+    {
+      "path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-2500",
+      "name": "checkpoint-2500",
+      "global_step": 2500,
+      "epoch": 2.0,
+      "adapter_files_present": true
+    },
+    {
+      "path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-3750",
+      "name": "checkpoint-3750",
+      "global_step": 3750,
+      "epoch": 3.0,
+      "adapter_files_present": true
+    }
+  ],
+  "total_elapsed_seconds": 20480.093654040247,
+  "examples_per_second": 2.9296741027433435,
+  "peak_gpu_memory_mb": 13016.713728,
+  "nan_or_inf_in_loss": false,
+  "oom": false,
+  "resumed_from_checkpoint": null,
+  "python_version": "3.12.3",
+  "torch_version": "2.8.0+cu128",
+  "transformers_version": "4.51.3",
+  "git_commit": "4fd741f44e9b9fbd7c928235acc4d2a56c8d9200",
+  "working_tree_dirty": true
+}

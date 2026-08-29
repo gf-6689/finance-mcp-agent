@@ -1,0 +1,26 @@
+{
+  "purpose": "frozen formal Risk QLoRA adapter (Checkpoint 4B); eval_test may be read only after this manifest exists and verifies",
+  "selected_checkpoint_path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-2500",
+  "selected_epoch": 2.0,
+  "selected_global_step": 2500,
+  "adapter_model_safetensors": {
+    "path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-2500/adapter_model.safetensors",
+    "sha256": "cb883e25570e8490d4dbab44b985293bce7b1d72e1181610e781a588fd2732ae"
+  },
+  "adapter_config_json": {
+    "path": "/root/autodl-tmp/Finance/artifacts/risk_qlora_formal_v1/checkpoint-2500/adapter_config.json",
+    "sha256": "d3361f4347f2771adb611e1d398895e385909a0feb3fa6e0e44c07f65599126f"
+  },
+  "base_model_path": "/root/autodl-tmp/Finance/Qwen",
+  "train_sample_ids_sha256": "e975eb686e33b7614076e8e233321592224df25e4686a51cf3650baa3b538a0b",
+  "val_sample_ids_sha256": "98d857146c51e522db1eb3ce789d116d46e270753d6ff373523f5853ed9ffe9e",
+  "selection_metric": "val_macro_f1",
+  "selection_rule": "post_training_generative_val; highest Val1000 Macro-F1 (labels [1,2,3,4,5], average=macro, zero_division=0); exact tie -> smaller_global_step",
+  "selection_result": {
+    "val_macro_f1": 0.5022141939958523,
+    "accuracy": 0.754,
+    "valid_output_rate": 1.0,
+    "invalid_count": 0
+  },
+  "selection_file": "/root/autodl-tmp/Finance/results/qwen/qlora/val_checkpoint_selection.json"
+}
